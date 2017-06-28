@@ -1,0 +1,23 @@
+{
+  "name": "contract-prover",
+    "version": "0.0.1",
+    "author": "Michael Hanus <mh@informatik.uni-kiel.de>",
+    "synopsis": "A tool to optimize contracts in FlatCurry programs by proving contracts",
+    "category": [ "Optimization", "Verification" ],
+    "license": "BSD-3-Clause",
+    "licenseFile": "LICENSE",
+    "dependencies": {
+        "flatcurry-annotated": ">= 1.0.0",
+        "showflatcurry": ">= 0.0.1"
+    },
+    "configModule": "PackageConfig",
+    "executable": {
+        "name": "curry-ctopt",
+        "main": "ContractProver"
+    },
+    "testsuite": {
+        "src-dir": "examples",
+        "script": "test.sh",
+        "options": "-v"
+    }
+}
