@@ -19,5 +19,9 @@
         "src-dir": "examples",
         "script": "test.sh",
         "options": "-v"
+    },
+    "source": {
+        "git": "https://git.ps.informatik.uni-kiel.de/curry-packages/contract-prover.git",
+        "tag": "$version"
     }
 }
