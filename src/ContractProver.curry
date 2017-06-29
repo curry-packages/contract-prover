@@ -41,20 +41,21 @@ type TAExpr       = AExpr       TypeExpr
 type TABranchExpr = ABranchExpr TypeExpr
 type TAPattern    = APattern    TypeExpr
 
+-- Just for testing:
 m :: IO ()
 m = mf "Fac"
 
 mf :: String -> IO ()
 mf p = do
   system $ "rm -f .curry/" ++ p ++ ".fcy"
-  mainWithOpts defaultOptions { optVerb = 2 } p
+  eliminateContracts defaultOptions { optVerb = 2 } p
 
 ------------------------------------------------------------------------
 
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 28/06/17)"
+   bannerText = "Contract Optimization Tool (Version of 29/06/17)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
@@ -62,24 +63,28 @@ banner = unlines [bannerLine,bannerText,bannerLine]
 main :: IO ()
 main = do
   args <- getArgs
-  (opts,prog) <- processOptions args
+  (opts,progs) <- processOptions banner args
   z3exists <- fileInPath "z3"
-  unless z3exists $ do
-    putStrLn "The program 'z3' could not be found in the PATH!"
-    putStrLn "The SMT solver Z3 is required for the contract prover to work!"
-    exitWith 1
-  mainWithOpts opts prog
+  if z3exists
+    then do
+      when (optVerb opts > 0) $ putStrLn banner
+      mapIO_ (eliminateContracts opts) progs
+    else do
+      putStrLn "CONTRACT VERIFICATION SKIPPED:"
+      putStrLn "The SMT solver Z3 is required for the contract prover to work"
+      putStrLn "but the program 'z3' is not found on the PATH!"
 
-mainWithOpts :: Options -> String -> IO ()
-mainWithOpts opts mainmodname = do
-  when (optVerb opts > 0) $ putStrLn banner
+-- Optimize a module by proving its contracts:
+eliminateContracts :: Options -> String -> IO ()
+eliminateContracts opts mainmodname = do
   prog <- readFlatCurry mainmodname
   inferProg prog >>=
-    either (\e -> putStrLn $ "Error during FlatCurry type inference:\n" ++ e)
-           (\aprog -> eliminateContracts opts aprog)
+    either (\e -> putStrLn ("Error during FlatCurry type inference:\n" ++ e) >>
+                  exitWith 1)
+           (\aprog -> eliminateContractsInProg opts aprog)
 
-eliminateContracts :: Options -> TAProg ->  IO ()
-eliminateContracts opts prog = do
+eliminateContractsInProg :: Options -> TAProg ->  IO ()
+eliminateContractsInProg opts prog = do
   printWhenAll opts $ unlines $
     ["ORIGINAL PROGRAM:", line, showCurryModule (unAnnProg prog), line]
   (postoptprog,stats1) <- eliminatePostConditions opts
@@ -413,9 +418,10 @@ extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =
                           (args!!)
                           (elemIndex r (map fst orgargs))
 
-  resType n te = if n==0 then te
-                         else case te of FuncType _ rt -> resType (n-1) rt
-                                         _ -> error "resType!"
+  resType n te = if n==0
+                   then te
+                   else case te of FuncType _ rt -> resType (n-1) rt
+                                   _ -> error "Internal errror: resType!"
 
 -- Returns the precondition expression for a given operation
 -- and its arguments (which are assumed to be variable indices).

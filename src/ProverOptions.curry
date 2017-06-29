@@ -24,19 +24,20 @@ defaultOptions = Options 1 False True
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
-processOptions :: [String] -> IO (Options,String)
-processOptions argv = do
+processOptions :: String -> [String] -> IO (Options,[String])
+processOptions banner argv = do
   let (funopts, args, opterrors) = getOpt Permute options argv
       opts = foldl (flip id) defaultOptions funopts
   unless (null opterrors)
-         (putStr (unlines opterrors) >> putStrLn usageText >> exitWith 1)
-  when (optHelp opts) (putStrLn usageText >> exitWith 0)
-  when (length args /= 1 || optHelp opts) (putStrLn usageText >> exitWith 1)
-  return (opts, stripCurrySuffix (head args))
+         (putStr (unlines opterrors) >> printUsage >> exitWith 1)
+  when (optHelp opts) (printUsage >> exitWith 0)
+  return (opts, map stripCurrySuffix args)
+ where
+  printUsage = putStrLn (banner ++ "\n" ++ usageText)
 
 -- Help text
 usageText :: String
-usageText = usageInfo ("Usage: curry-opt [options] <module name>\n") options
+usageText = usageInfo ("Usage: curry-ctopt [options] <module names>\n") options
   
 -- Definition of actual command line options.
 options :: [OptDescr (Options -> Options)]
