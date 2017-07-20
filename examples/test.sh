@@ -22,5 +22,8 @@ for p in *.curry ; do
   rm test.out
 done
 if [ $ECODE -gt 0 ] ; then
+  echo "FAILURES OCCCURRED IN SOME TESTS!"
   exit $ECODE
+elif [ $VERBOSE = yes ] ; then
+  echo "All tests successfully executed!"
 fi

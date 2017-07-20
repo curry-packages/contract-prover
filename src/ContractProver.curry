@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version June 2017
+--- @version July 2017
 ---------------------------------------------------------------------------
 
 module ContractProver where
@@ -16,30 +16,23 @@ import FlatCurry.Types
 import IOExts
 import List         ( deleteBy, elemIndex, find, intersect, isSuffixOf
                     , maximum, minimum, splitOn )
+import Maybe        ( catMaybes )
 import Pretty       ( pPrint )
 import State
-import System       ( exitWith, getArgs, getEnviron, system )
+import System       ( getArgs, getEnviron, system )
 import Unsafe
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies
-import FlatCurry.Annotated.Pretty        ( ppProg, ppExp )
+import FlatCurry.Annotated.Pretty        ( ppProg )
 import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.TypeInference ( inferProg )
 import ShowFlatCurry                     ( showCurryModule )
 
 -- Imports from package modules:
 import BoolExp
+import Curry2SMT
 import PackageConfig ( packagePath )
 import ProverOptions
-
--- Type synomyms for type-annotated FlatCurry entities:
-type TAProg       = AProg       TypeExpr
-type TAFuncDecl   = AFuncDecl   TypeExpr
-type TARule       = ARule       TypeExpr
-type TAExpr       = AExpr       TypeExpr
-type TABranchExpr = ABranchExpr TypeExpr
-type TAPattern    = APattern    TypeExpr
 
 -- Just for testing:
 m :: IO ()
@@ -55,7 +48,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 29/06/17)"
+   bannerText = "Contract Optimization Tool (Version of 20/07/17)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
@@ -77,11 +70,8 @@ main = do
 -- Optimize a module by proving its contracts:
 eliminateContracts :: Options -> String -> IO ()
 eliminateContracts opts mainmodname = do
-  prog <- readFlatCurry mainmodname
-  inferProg prog >>=
-    either (\e -> putStrLn ("Error during FlatCurry type inference:\n" ++ e) >>
-                  exitWith 1)
-           (\aprog -> eliminateContractsInProg opts aprog)
+  prog <- readTypedFlatCurry mainmodname
+  eliminateContractsInProg opts prog
 
 eliminateContractsInProg :: Options -> TAProg ->  IO ()
 eliminateContractsInProg opts prog = do
@@ -558,42 +548,6 @@ normalizeArgs (e:es) = case e of
                  normalizeArgs es `bindS` \ (bs,nes) ->
                  returnS ((fvar,e):bs, AVar (annExpr e) fvar : nes)
 
-pat2bool :: TAPattern -> BoolExp
-pat2bool (ALPattern _ l)    = lit2bool l
-pat2bool (APattern _ (qf,_) ps) = BTerm (transOpName qf) (map (BVar . fst) ps)
-
-lit2bool :: Literal -> BoolExp
-lit2bool (Intc i)   = BTerm (show i) []
-lit2bool (Floatc i) = BTerm (show i) []
-lit2bool (Charc i)  = BTerm (show i) []
-
-isPrimOp :: QName -> Bool
-isPrimOp (mn,fn) = mn=="Prelude" && fn `elem` map fst primOps
-
-transOpName :: QName -> String
-transOpName (mn,fn)
- | mn=="Prelude" = maybe (mn ++ "_" ++ fn) id (lookup fn primOps)
- | otherwise     = mn ++ "_" ++ fn
-
-primOps :: [(String,String)]
-primOps =
-  [("==","=")
-  ,("True","true")
-  ,("False","false")
-  ,("[]","nil")
-  ,(":","insert")
-  ,("+","+")
-  ,("-","-")
-  ,("*","*")
-  ,(">",">")
-  ,(">=",">=")
-  ,("<","<")
-  ,("<=","<=")
-  ,("not","not")
-  ,("&&","and")
-  ,("||","or")
-  ]
-
 
 unzipBranches :: [TABranchExpr] -> ([TAPattern],[TAExpr])
 unzipBranches []                 = ([],[])
@@ -631,23 +585,26 @@ checkImplicationWithSMT opts vartypes assertion impbindings imp = do
               [ "; Free variables:"
               , typedVars2SMT vartypes
               , "; Boolean formula of assertion (known properties):"
-              , withBracket $ "assert " ++ showBoolExp assertion
+              , showBoolExp (assertSMT assertion)
               , ""
               , "; Bindings of implication:"
-              , withBracket $ "assert " ++ showBoolExp impbindings
+              , showBoolExp (assertSMT impbindings)
               , ""
               , "; Assert negated implication:"
-              , withBracket $ "assert " ++ showBoolExp (Not imp)
+              , showBoolExp (assertSMT (Not imp))
               , ""
               , "; check satisfiability:"
               , "(check-sat)"
               , "; if unsat, we can omit the postcondition check"
               ]
   let allsymbols = allSymbolsOfBE (Conj [assertion, impbindings, imp])
-  prelude <- mapIO (\p -> readFile (packagePath </> "include" </> p))
-                   (map (++".smt")
-                        ("Prelude" : intersect axiomatizedOps allsymbols))
-  let smtinput = concat prelude ++ smt
+      allqsymbols = catMaybes (map untransOpName allsymbols)
+  unless (null allqsymbols) $ printWhenIntermediate opts $
+    "Translating operations into SMT:\n" ++
+    unwords (map showQName allqsymbols)
+  smtfuncs   <- funcs2SMT allqsymbols
+  smtprelude <- readFile (packagePath </> "include" </> "Prelude.smt")
+  let smtinput = smtprelude ++ smtfuncs ++ smt
   printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ smtinput
   printWhenIntermediate opts $ "CALLING Z3..."
   (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:5"] smtinput
@@ -657,13 +614,15 @@ checkImplicationWithSMT opts vartypes assertion impbindings imp = do
   let pcvalid = let ls = lines out in not (null ls) && head ls == "unsat"
   return pcvalid
 
--- Operations axiomatized by specific smt scripts:
--- TODO: automatic generation of these smt scripts
+-- Operations axiomatized by specific smt scripts (no longer necessary
+-- since these scripts are now automatically generated by Curry2SMT.funcs2SMT).
+-- However, for future work, it might be reasonable to cache these scripts
+-- for faster contract checking.
 axiomatizedOps :: [String]
 axiomatizedOps = ["Prelude_null","Prelude_take","Prelude_length"]
 
 ---------------------------------------------------------------------------
--- Translates a FlatCurry type to SMT type:
+-- Translates a FlatCurry type to an SMT type string:
 type2SMT :: TypeExpr -> String
 type2SMT (TVar _) = "TVar"
 type2SMT (FuncType dom ran) = type2SMT dom ++ " -> " ++ type2SMT ran

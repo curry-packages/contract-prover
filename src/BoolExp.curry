@@ -12,31 +12,55 @@ data BoolExp = BVar Int
              | Conj [BoolExp]
              | Disj [BoolExp]
              | Not  BoolExp
+             | Binding String [(Int,BoolExp)] BoolExp
 
--- A Boolean true.
+--- A Boolean true.
 bTrue :: BoolExp
 bTrue = BTerm "true" []
 
--- A Boolean false.
+--- A Boolean false.
 bFalse :: BoolExp
 bFalse = BTerm "false" []
 
--- An equality between two Boolean terms.
+--- An equality between two Boolean terms.
 bEqu :: BoolExp -> BoolExp -> BoolExp
 bEqu b1 b2 = BTerm "=" [b1, b2]
 
--- An equality between a variable and a Boolean term.
+--- An equality between a variable and a Boolean term.
 bEquVar :: Int -> BoolExp -> BoolExp
 bEquVar v bexp = BTerm "=" [BVar v, bexp]
+
+--- A binding for a list of binding variables.
+bindingBE :: String -> [(Int,BoolExp)] -> BoolExp -> BoolExp
+bindingBE bkind bs exp | null bs   = exp
+                     | otherwise = Binding bkind bs exp
+
+--- A "let" binding.
+letBinding :: [(Int,BoolExp)] -> BoolExp -> BoolExp
+letBinding = bindingBE "let"
+
+--- A "forall" binding.
+forallBinding :: [(Int,BoolExp)] -> BoolExp -> BoolExp
+forallBinding = bindingBE "forall"
+
+--- An "exists" binding.
+existsBinding :: [(Int,BoolExp)] -> BoolExp -> BoolExp
+existsBinding = bindingBE "exists"
+
+--- An assertion of a Boolean expression.
+assertSMT :: BoolExp -> BoolExp
+assertSMT be = BTerm "assert" [be]
 
 ---------------------------------------------------------------------------
 -- All symbols occurring in a Boolean expression.
 allSymbolsOfBE :: BoolExp -> [String]
-allSymbolsOfBE (BVar _)       = []
-allSymbolsOfBE (BTerm s args) = foldr union [s] (map allSymbolsOfBE args)
-allSymbolsOfBE (Conj args)    = foldr union [] (map allSymbolsOfBE args)
-allSymbolsOfBE (Disj args)    = foldr union [] (map allSymbolsOfBE args)
-allSymbolsOfBE (Not arg)      = allSymbolsOfBE arg
+allSymbolsOfBE (BVar _)         = []
+allSymbolsOfBE (BTerm s args)   = foldr union [s] (map allSymbolsOfBE args)
+allSymbolsOfBE (Conj args)      = foldr union [] (map allSymbolsOfBE args)
+allSymbolsOfBE (Disj args)      = foldr union [] (map allSymbolsOfBE args)
+allSymbolsOfBE (Not arg)        = allSymbolsOfBE arg
+allSymbolsOfBE (Binding _ bs e) =
+  foldr union [] (map allSymbolsOfBE (e : map snd bs))
 
 ---------------------------------------------------------------------------
 -- Simplify Boolean expression for better readability.
@@ -50,6 +74,7 @@ simpBE (Disj (_ ++ [BTerm "true" []] ++ _)) = bTrue
 simpBE (Disj (bs1 ++ [Disj bs2] ++ bs3)) = simpBE (Disj (bs1 ++ bs2 ++ bs3))
 simpBE (Disj bs) = Disj (map simpBE bs)
 simpBE (Not (Not b)) = b
+simpBE (Binding _ [] e) = e
 simpBE'default be = be
 
 ---------------------------------------------------------------------------
@@ -63,6 +88,7 @@ smtBE :: BoolExp -> String
 smtBE (BVar i) = 'x' : show i
 smtBE (BTerm f args)
   | f == "="  = asLisp ["=", smtBE (head args), smtBE (args!!1)]
+  | f == "let" = asLisp ["let", asLisp (map (\ (BTerm _ [v,e]) -> asLisp [smtBE v, smtBE e]) (tail args)), smtBE (head args)]
   | otherwise = if null args then f
                              else asLisp $ f : map smtBE args
 smtBE (Conj bs) = case bs of
@@ -74,6 +100,10 @@ smtBE (Disj bs) = case bs of
   [b] -> smtBE b
   _   -> asLisp $ "or" : map smtBE bs
 smtBE (Not b) = asLisp ["not", smtBE b]
+smtBE (Binding s bs e) =
+  asLisp [s,
+          asLisp (map (\ (v,b) -> asLisp [smtBE (BVar v), smtBE b]) bs),
+          smtBE e]
 
 asLisp :: [String] -> String
 asLisp = withBracket . unwords
@@ -96,6 +126,12 @@ prettyBE (Disj bs) = case bs of
   [b] -> prettyBE b
   _   -> withBracket (intercalate " || " (map prettyBE bs))
 prettyBE (Not b) = withBracket ("not " ++ prettyBE b)
+prettyBE (Binding s bs e) = withBracket $ unwords $
+  [s,
+   "{", intercalate ";"
+          (map (\ (v,b) -> unwords [prettyBE (BVar v), "=", prettyBE b]) bs),
+   "}",
+   prettyBE e]
 
 withBracket :: String -> String
 withBracket s = '(' : s ++ ")"
