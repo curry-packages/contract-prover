@@ -48,7 +48,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 20/07/17)"
+   bannerText = "Contract Optimization Tool (Version of 13/09/17)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
