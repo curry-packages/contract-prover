@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version July 2017
+--- @version September 2017
 ---------------------------------------------------------------------------
 
 module ContractProver where
@@ -158,6 +158,7 @@ makeTransInfo fdecls = TransInfo fdecls preconds postconds woprefuns
   woprefuns = filter (\fd -> woPreCondSuffix `isSuffixOf` snd (funcName fd))
                      fdecls
 
+---------------------------------------------------------------------------
 -- The state of the transformation process contains
 -- * the current assertion
 -- * a fresh variable index
@@ -170,6 +171,14 @@ data TransState = TransState
 
 makeTransState :: Int -> [(Int,TypeExpr)] -> TransState
 makeTransState = TransState bTrue
+
+-- Increments fresh variable index.
+incFreshVarIndex :: TransState -> TransState
+incFreshVarIndex st = st { freshVar = freshVar st + 1 }
+
+-- Adds variables to the state.
+addVarTypes :: [(Int,TypeExpr)] -> TransState -> TransState
+addVarTypes vts st = st { varTypes = vts ++ varTypes st }
 
 ---------------------------------------------------------------------------
 -- Statistical information of the transformation process:
@@ -234,7 +243,7 @@ optPreConditionInRule opts ti (mn,fn) (ARule rty rargs rhs) statsref = do
                 then dropWoPreCondSuffix (mn,fn)
                 else (mn,fn)
       -- compute precondition of operation:
-      s0 = makeTransState (maximum (0 : map fst rargs) + 1) rargs
+      s0 = makeTransState (maximum (0 : map fst rargs ++ allVars rhs) + 1) rargs
       (precondformula,s1)  = preCondExpOf ti orgqn [1..farity] s0
       s2 = s1 { preCond = precondformula }
   newrhs <- optPreCondInExp s2 rhs
@@ -270,7 +279,7 @@ optPreConditionInRule opts ti (mn,fn) (ARule rty rargs rhs) statsref = do
     ACase ty ct e brs -> do
       ne <- optPreCondInExp pts e
       let freshvar = freshVar pts
-          (be,pts1) = exp2bool ti (freshvar,ne)  pts{ freshVar = freshvar+1 }
+          (be,pts1) = exp2bool ti (freshvar,ne) (incFreshVarIndex pts)
           pts2 = pts1 { preCond = Conj [preCond pts, be]
                       , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
       nbrs <- mapIO (optPreCondInBranch pts2 freshvar) brs
@@ -473,7 +482,7 @@ pred2bool exp = case exp of
 -- between the first argument variable and the translated expression.
 -- The translated expression is normalized when necessary.
 -- For this purpose, a "fresh variable index" is passed as a state.
--- Moreover, the state contains also the types of all fresh variables.
+-- Moreover, the returned state contains also the types of all fresh variables.
 exp2bool :: TransInfo -> (Int,TAExpr) -> State TransState BoolExp
 exp2bool ti (resvar,exp) = case exp of
   AVar _ i          -> returnS $ if resvar==i
@@ -497,10 +506,7 @@ exp2bool ti (resvar,exp) = case exp of
   ACase _ _ e brs   ->
     getS `bindS` \ts ->
     let freshvar = freshVar ts
-        vartypes = varTypes ts
-        nts = ts { freshVar = freshvar+1
-                 , varTypes = (freshvar,annExpr e) : vartypes }
-    in putS nts `bindS_`
+    in putS (addVarTypes [(freshvar, annExpr e)] (incFreshVarIndex ts)) `bindS_`
        exp2bool ti (freshvar,e) `bindS` \argbexp ->
        mapS branch2bool (map (\b->(freshvar,b)) brs) `bindS` \bbrs ->
        returnS (Conj [argbexp, Disj bbrs])
@@ -528,7 +534,13 @@ exp2bool ti (resvar,exp) = case exp of
    
    branch2bool (cvar, (ABranch p e)) =
      exp2bool ti (resvar,e) `bindS` \branchbexp ->
+     getS `bindS` \ts ->
+     putS ts { varTypes = patvars ++ varTypes ts} `bindS_`
      returnS (Conj [ bEquVar cvar (pat2bool p), branchbexp])
+    where
+     patvars = if isConsPattern p
+                 then patArgs p
+                 else []
 
 
    arg2bool e = case e of AVar _ i -> BVar i
@@ -542,8 +554,7 @@ normalizeArgs (e:es) = case e of
               returnS ((i,e):bs, e:nes)
   _        -> getS `bindS` \ts ->
               let fvar = freshVar ts
-                  nts  = ts { freshVar = fvar+1
-                            , varTypes = (fvar,annExpr e) : varTypes ts }
+                  nts  = addVarTypes [(fvar,annExpr e)] (incFreshVarIndex ts)
               in putS nts `bindS_`
                  normalizeArgs es `bindS` \ (bs,nes) ->
                  returnS ((fvar,e):bs, AVar (annExpr e) fvar : nes)
