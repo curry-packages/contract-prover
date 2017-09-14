@@ -75,6 +75,7 @@ simpBE (Disj (bs1 ++ [Disj bs2] ++ bs3)) = simpBE (Disj (bs1 ++ bs2 ++ bs3))
 simpBE (Disj bs) = Disj (map simpBE bs)
 simpBE (Not (Not b)) = b
 simpBE (Binding _ [] e) = e
+simpBE (BTerm s args) = BTerm s (map simpBE args)
 simpBE'default be = be
 
 ---------------------------------------------------------------------------

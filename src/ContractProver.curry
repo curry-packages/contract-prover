@@ -356,6 +356,7 @@ provePostCondition opts ti wopostfun allfuns stats = do
     --putStrLn $ "Operation with postcondition check:\n" ++
     --           snd (funcName postcheckfun)
     let (postmn,postfn) = funcName postfun
+        mainfunc        = snd (funcName postcheckfun)
         orgqn           = (postmn, reverse (drop 5 (reverse postfn)))
     --putStrLn $ "Operation defining postcondition :\n" ++ postfn
     let farity = funcArity wopostfun
@@ -364,19 +365,19 @@ provePostCondition opts ti wopostfun allfuns stats = do
         (precondformula,s1)  = preCondExpOf ti orgqn [1..farity] s0
         (postcondformula,s2) = (applyFunc postfun [1 .. farity+1] `bindS`
                                 pred2bool) s1
+    printWhenStatus opts $
+      "Trying to prove postcondition of '" ++ mainfunc ++ "'..."
     pcvalid <- checkImplicationWithSMT opts (varTypes s2)
                                        (Conj [precondformula, bodyformula])
                                        bTrue postcondformula
     let nstats = incPostCond pcvalid stats
     if pcvalid
-      then do printWhenStatus opts $
-                snd (funcName postcheckfun) ++ ": POSTCOND CHECK REMOVED"
+      then do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK REMOVED"
               let newpostcheckfun = updFuncRule (const (funcRule wopostfun))
                                                 postcheckfun
               return (deleteBy (\f g -> funcName f == funcName g) wopostfun
                                (updFuncDecl newpostcheckfun allfuns), nstats)
-      else do printWhenStatus opts $
-                snd (funcName postcheckfun) ++ ": POSTCOND CHECK unchanged"
+      else do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK unchanged"
               return (allfuns, nstats)
 
 -- Find the postcondition operation and the operation which invokes
@@ -611,7 +612,7 @@ checkImplicationWithSMT opts vartypes assertion impbindings imp = do
   let allsymbols = allSymbolsOfBE (Conj [assertion, impbindings, imp])
       allqsymbols = catMaybes (map untransOpName allsymbols)
   unless (null allqsymbols) $ printWhenIntermediate opts $
-    "Translating operations into SMT:\n" ++
+    "Translating operations into SMT: " ++
     unwords (map showQName allqsymbols)
   smtfuncs   <- funcs2SMT allqsymbols
   smtprelude <- readFile (packagePath </> "include" </> "Prelude.smt")
