@@ -48,7 +48,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 13/09/17)"
+   bannerText = "Contract Optimization Tool (Version of 15/09/17)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
@@ -78,9 +78,9 @@ eliminateContractsInProg opts prog = do
   printWhenAll opts $ unlines $
     ["ORIGINAL PROGRAM:", line, showCurryModule (unAnnProg prog), line]
   (postoptprog,stats1) <- eliminatePostConditions opts
-                            (makeTransInfo (progFuncs prog)) prog initStats
+                            (makeTransInfo opts (progFuncs prog)) prog initStats
   (newprog,stats2) <- eliminatePreConditions opts
-                        (makeTransInfo (progFuncs postoptprog))
+                        (makeTransInfo opts (progFuncs postoptprog))
                         postoptprog stats1
   let unewprog = unAnnProg newprog
   printWhenAll opts $ unlines $
@@ -141,14 +141,15 @@ orgNameOf qn =
 ---------------------------------------------------------------------------
 -- Some global information used by the transformation process:
 data TransInfo = TransInfo
-  { allFuns       :: [TAFuncDecl] -- all defined operations
+  { tiOptions     :: Options      -- options passall defined operations
+  , allFuns       :: [TAFuncDecl] -- all defined operations
   , preConds      :: [TAFuncDecl] -- all precondition operations
   , postConds     :: [TAFuncDecl] -- all postcondition operations
   , woPreCondFuns :: [TAFuncDecl] -- all operations without precond checking
   }
 
-makeTransInfo :: [TAFuncDecl] -> TransInfo
-makeTransInfo fdecls = TransInfo fdecls preconds postconds woprefuns
+makeTransInfo :: Options -> [TAFuncDecl] -> TransInfo
+makeTransInfo opts fdecls = TransInfo opts fdecls preconds postconds woprefuns
  where
   -- Precondition operations:
   preconds  = filter (\fd -> "'pre"  `isSuffixOf` snd (funcName fd)) fdecls
@@ -182,34 +183,42 @@ addVarTypes vts st = st { varTypes = vts ++ varTypes st }
 
 ---------------------------------------------------------------------------
 -- Statistical information of the transformation process:
--- all preconds / removed preconds / all postconds / removed postconds
-data Statistics = Statistics Int Int Int Int
+-- kept preconds / removed preconds / kept postconds / removed postconds
+data Statistics = Statistics [String] [String] [String] [String]
 
 initStats :: Statistics
-initStats = Statistics 0 0 0 0
+initStats = Statistics [] [] [] []
 
 --- Shows the statistics in human-readable format.
 showStats :: Statistics -> String
-showStats (Statistics allpre rmpre allpost rmpost) =
-  "\nRemoved preconditions : " ++ show rmpre ++ " of " ++ show allpre ++
-  " / Removed postconditions: " ++ show rmpost ++ " of " ++ show allpost ++
-  (if allpre==rmpre && allpost==rmpost then "\nALL CONTRACTS VERIFIED!" else "")
+showStats (Statistics keptpre rmpre keptpost rmpost) =
+  showStat "REMOVED PRECONDITIONS"    rmpre ++
+  showStat "UNCHANGED PRECONDITIONS"  keptpre ++
+  showStat "REMOVED POSTCONDITIONS"   rmpost ++
+  showStat "UNCHANGED POSTCONDITIONS" keptpost ++
+  (if null keptpre && null keptpost then "\nALL CONTRACTS VERIFIED!" else "")
+ where
+  showStat t fs = if null fs then "" else "\n" ++ t ++ ": " ++ unwords fs
 
 --- Was there some optimization of a contract?
 isOptimized :: Statistics -> Bool
-isOptimized (Statistics _ rmpre _ rmpost) = rmpre>0 || rmpost>0
+isOptimized (Statistics _ rmpre _ rmpost) =
+  not (null rmpre && null rmpost)
 
 --- Increments the number of preconditions. If the first argument is true,
 --- a precondition has been removed.
-incPreCond :: Bool -> Statistics -> Statistics
-incPreCond removed (Statistics allpre rmpre allpost rmpost) =
-  Statistics (allpre+1) (rmpre + if removed then 1 else 0) allpost rmpost
+addPreCondToStats :: String -> Bool -> Statistics -> Statistics
+addPreCondToStats pc removed (Statistics keptpre rmpre keptpost rmpost) =
+  if removed then Statistics keptpre (pc:rmpre) keptpost rmpost
+             else Statistics (pc:keptpre) rmpre keptpost rmpost
 
---- Increments the number of postconditions. If the first argument is true,
---- a postcondition has been removed.
-incPostCond :: Bool -> Statistics -> Statistics
-incPostCond removed (Statistics allpre rmpre allpost rmpost) =
-  Statistics allpre rmpre (allpost+1) (rmpost + if removed then 1 else 0)
+--- Adds an operation to the already processed operations with postconditions.
+--- If the second argument is true, the postcondition of this operation
+--- has been removed.
+addPostCondToStats :: String -> Bool -> Statistics -> Statistics
+addPostCondToStats pc removed (Statistics keptpre rmpre keptpost rmpost) =
+  if removed then Statistics keptpre rmpre keptpost (pc:rmpost)
+             else Statistics keptpre rmpre (pc:keptpost) rmpost
 
 ---------------------------------------------------------------------------
 -- Eliminate possible preconditions checks:
@@ -260,12 +269,13 @@ optPreConditionInRule opts ti (mn,fn) (ARule rty rargs rhs) statsref = do
             then do
               printWhenIntermediate opts $ "Optimizing call to " ++ snd qf
               let ((bs,_)     ,pts1) = normalizeArgs nargs pts
-                  (bindexps   ,pts2) = mapS (exp2bool ti) bs pts1
+                  (bindexps   ,pts2) = mapS (exp2bool True ti) bs pts1
                   (precondcall,pts3) = preCondExpOf ti qf (map fst bs) pts2
-              -- TODO: select from 'bindexps' the demanded argument positions
+              -- TODO: select from 'bindexps' only demanded argument positions
               pcvalid <- checkImplicationWithSMT opts (varTypes pts3)
                            (preCond pts) (Conj bindexps) precondcall
-              modifyIORef statsref (incPreCond pcvalid)
+              modifyIORef statsref
+                          (addPreCondToStats (snd qf ++ "("++fn++")") pcvalid)
               if pcvalid
                 then do
                   printWhenStatus opts $
@@ -279,7 +289,7 @@ optPreConditionInRule opts ti (mn,fn) (ARule rty rargs rhs) statsref = do
     ACase ty ct e brs -> do
       ne <- optPreCondInExp pts e
       let freshvar = freshVar pts
-          (be,pts1) = exp2bool ti (freshvar,ne) (incFreshVarIndex pts)
+          (be,pts1) = exp2bool True ti (freshvar,ne) (incFreshVarIndex pts)
           pts2 = pts1 { preCond = Conj [preCond pts, be]
                       , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
       nbrs <- mapIO (optPreCondInBranch pts2 freshvar) brs
@@ -370,7 +380,7 @@ provePostCondition opts ti wopostfun allfuns stats = do
     pcvalid <- checkImplicationWithSMT opts (varTypes s2)
                                        (Conj [precondformula, bodyformula])
                                        bTrue postcondformula
-    let nstats = incPostCond pcvalid stats
+    let nstats = addPostCondToStats mainfunc pcvalid stats
     if pcvalid
       then do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK REMOVED"
               let newpostcheckfun = updFuncRule (const (funcRule wopostfun))
@@ -411,7 +421,7 @@ extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =
       rtype  = resType (length orgargs) ty
       state0 = makeTransState (maximum (resvar : allVars exp) + 1)
                               ((resvar, rtype) : zip args (map snd orgargs))
-  in exp2bool ti (resvar,exp) state0
+  in exp2bool True ti (resvar,exp) state0
  where
   maxArgResult = maximum (resvar : args)
   renameRuleVar r = maybe (r + maxArgResult + 1)
@@ -479,62 +489,68 @@ pred2bool exp = case exp of
 
 
 -- Translates an expression to a Boolean formula representing
--- the postcondition assertion by generating an equality
--- between the first argument variable and the translated expression.
+-- the postcondition assertion by generating an equation
+-- between the argument variable (represented by its index in the first
+-- component) and the translated expression (second component).
 -- The translated expression is normalized when necessary.
 -- For this purpose, a "fresh variable index" is passed as a state.
 -- Moreover, the returned state contains also the types of all fresh variables.
-exp2bool :: TransInfo -> (Int,TAExpr) -> State TransState BoolExp
-exp2bool ti (resvar,exp) = case exp of
-  AVar _ i          -> returnS $ if resvar==i
-                                   then bTrue
-                                   else bEquVar resvar (BVar i)
-  ALit _ l          -> returnS (bEquVar resvar (lit2bool l))
+-- If the first argument is `False`, the expression is not strictly demanded,
+-- i.e., possible contracts of it (if it is a function call) are ignored.
+exp2bool :: Bool -> TransInfo -> (Int,TAExpr) -> State TransState BoolExp
+exp2bool demanded ti (resvar,exp) = case exp of
+  AVar _ i -> returnS $ if resvar==i then bTrue
+                                     else bEquVar resvar (BVar i)
+  ALit _ l -> returnS (bEquVar resvar (lit2bool l))
   AComb ty _ (qf,_) args ->
     if qf == ("Prelude","?") && length args == 2
-      then exp2bool ti (resvar, AOr ty (args!!0) (args!!1))
+      then exp2bool demanded ti (resvar, AOr ty (args!!0) (args!!1))
       else normalizeArgs args `bindS` \ (bs,nargs) ->
-           mapS (exp2bool ti) bs `bindS` \bindexps ->
+           -- TODO: select from 'bindexps' only demanded argument positions
+           mapS (exp2bool (isPrimOp qf || optStrict (tiOptions ti)) ti)
+                bs `bindS` \bindexps ->
            comb2bool qf nargs bs bindexps
   ALet _ bs e ->
-    mapS (exp2bool ti) (map (\ ((i,_),ae) -> (i,ae)) bs) `bindS` \bindexps ->
-    exp2bool ti (resvar,e) `bindS` \bexp ->
+    mapS (exp2bool False ti)
+         (map (\ ((i,_),ae) -> (i,ae)) bs) `bindS` \bindexps ->
+    exp2bool demanded ti (resvar,e) `bindS` \bexp ->
     returnS (Conj (bindexps ++ [bexp]))
   AOr _ e1 e2  ->
-    exp2bool ti (resvar,e1) `bindS` \bexp1 ->
-    exp2bool ti (resvar,e2) `bindS` \bexp2 ->
+    exp2bool demanded ti (resvar,e1) `bindS` \bexp1 ->
+    exp2bool demanded ti (resvar,e2) `bindS` \bexp2 ->
     returnS (Disj [bexp1, bexp2])
   ACase _ _ e brs   ->
     getS `bindS` \ts ->
     let freshvar = freshVar ts
     in putS (addVarTypes [(freshvar, annExpr e)] (incFreshVarIndex ts)) `bindS_`
-       exp2bool ti (freshvar,e) `bindS` \argbexp ->
+       exp2bool demanded ti (freshvar,e) `bindS` \argbexp ->
        mapS branch2bool (map (\b->(freshvar,b)) brs) `bindS` \bbrs ->
        returnS (Conj [argbexp, Disj bbrs])
-  ATyped _ e _ -> exp2bool ti (resvar,e)
+  ATyped _ e _ -> exp2bool demanded ti (resvar,e)
   AFree _ _ _ -> error "Free variables not yet supported!"
  where
    comb2bool qf nargs bs bindexps
-    | isPrimOp qf
-    = returnS (Conj (bindexps ++
-                     [bEquVar resvar (BTerm (transOpName qf)
-                                            (map arg2bool nargs))]))
     | qf == ("Prelude","otherwise")
       -- specific handling for the moment since the front end inserts it
       -- as the last alternative of guarded rules...
     = returnS (bEquVar resvar bTrue)
     | qf == ("Prelude","[]")
     = returnS (bEquVar resvar (BTerm "nil" []))
-    | qf == ("Prelude",":") --&& length nargs == 2
+    | qf == ("Prelude",":") && length nargs == 2
     = returnS (Conj (bindexps ++
                      [bEquVar resvar (BTerm "insert" (map arg2bool nargs))]))
-    | otherwise -- non-primitive operation: add only the contract
+    -- TODO: translate also other data constructors into SMT
+    | isPrimOp qf
+    = returnS (Conj (bindexps ++
+                     [bEquVar resvar (BTerm (transOpName qf)
+                                            (map arg2bool nargs))]))
+    | otherwise -- non-primitive operation: add contract only if demanded
     = preCondExpOf ti qf (map fst bs) `bindS` \precond ->
       postCondExpOf ti qf (map fst bs ++ [resvar]) `bindS` \postcond ->
-      returnS (Conj (bindexps ++ [precond,postcond]))
+      returnS (Conj (bindexps ++ if demanded then [precond,postcond] else []))
    
    branch2bool (cvar, (ABranch p e)) =
-     exp2bool ti (resvar,e) `bindS` \branchbexp ->
+     exp2bool demanded ti (resvar,e) `bindS` \branchbexp ->
      getS `bindS` \ts ->
      putS ts { varTypes = patvars ++ varTypes ts} `bindS_`
      returnS (Conj [ bEquVar cvar (pat2bool p), branchbexp])

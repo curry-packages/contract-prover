@@ -134,7 +134,7 @@ lit2bool (Charc i)  = BTerm (show i) []
 --- Translates a qualified FlatCurry name into an SMT string.
 transOpName :: QName -> String
 transOpName (mn,fn)
- | mn=="Prelude" = maybe (mn ++ "_" ++ fn) id (lookup fn primOps)
+ | mn=="Prelude" = maybe (mn ++ "_" ++ fn) id (lookup fn (primCons ++ primOps))
  | otherwise     = mn ++ "_" ++ fn
 
 --- Translates an SMT string into qualified FlatCurry name.
@@ -149,14 +149,10 @@ untransOpName s = let (mn,ufn) = break (=='_') s in
 isPrimOp :: QName -> Bool
 isPrimOp (mn,fn) = mn=="Prelude" && fn `elem` map fst primOps
 
---- Primitive operations/constructors and their SMT names.
+--- Primitive operations and their SMT names.
 primOps :: [(String,String)]
 primOps =
   [("==","=")
-  ,("True","true")
-  ,("False","false")
-  ,("[]","nil")
-  ,(":","insert")
   ,("+","+")
   ,("-","-")
   ,("*","*")
@@ -167,6 +163,15 @@ primOps =
   ,("not","not")
   ,("&&","and")
   ,("||","or")
+  ]
+
+--- Primitive constructors and their SMT names.
+primCons :: [(String,String)]
+primCons =
+  [("True","true")
+  ,("False","false")
+  ,("[]","nil")
+  ,(":","insert")
   ]
 
 ----------------------------------------------------------------------------

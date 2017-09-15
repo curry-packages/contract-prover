@@ -2,7 +2,7 @@
 --- The options of the contract verification tool.
 ---
 --- @author Michael Hanus
---- @version June 2017
+--- @version September 2017
 -------------------------------------------------------------------------
 
 module ProverOptions( Options(..), defaultOptions, processOptions )
@@ -17,10 +17,16 @@ data Options = Options
   { optVerb    :: Int    -- verbosity (0: quiet, 1: status, 2: interm, 3: all)
   , optHelp    :: Bool   -- if help info should be printed
   , optReplace :: Bool   -- replace FlatCurry program with optimized version?
+  , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
+                         -- in this case, we assume that all operations are
+                         -- strictly evaluated which might give better results
+                         -- but not not be correct if some argument is not
+                         -- demanded (TODO: add demand analysis to make it
+                         -- safe and powerful)
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False True
+defaultOptions = Options 1 False True False
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -49,8 +55,10 @@ options =
   , Option "v" ["verbosity"]
             (OptArg (maybe (checkVerb 2) (safeReadNat checkVerb)) "<n>")
             "verbosity level:\n0: quiet (same as `-q')\n1: show status messages (default)\n2: show intermediate results (same as `-v')\n3: show all intermediate results and more details"
-  , Option "n" ["nostore"] (NoArg (\opts -> opts { optReplace = True }))
+  , Option "n" ["nostore"] (NoArg (\opts -> opts { optReplace = False }))
            "do not write optimized program"
+  , Option "s" ["strict"] (NoArg (\opts -> opts { optStrict = True }))
+           "check contracts w.r.t. strict evaluation strategy"
   ]
  where
   safeReadNat opttrans s opts =
