@@ -2,8 +2,8 @@
 
 -- fac with recursive precondition:
 
-fib'pre n = n>=0
-fib'post n f = f>=0
+fib'pre n = n >= 0
+fib'post _ f = f >= 0
 
 fib x | x == 0 = 0
       | x == 1 = 1

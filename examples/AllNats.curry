@@ -7,4 +7,3 @@ allNats n = if n==0 then 0 else n ? allNats (n-1)
 allNats'pre n = n >= 0
 
 main1 = allNats 100000 =:= 0
--- PAKCS@belair: 0.41

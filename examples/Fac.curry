@@ -16,3 +16,7 @@ main2 = fac (fac 4)
 --main3 x = fac x
 
 
+-- Although difference not measurable, it is important to verify
+-- as many precondition as possible, since this provide more reliable
+-- software which does not crash at run-time
+

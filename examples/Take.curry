@@ -9,6 +9,7 @@ ctake n (x:xs) | n>0 = x : ctake (n-1) xs
 
 main1 = isList (ctake 100000 [1..])
 
+-- Just check the list structure:
 isList :: [a] -> Bool
 isList [] = True
 isList (_:xs) = isList xs
