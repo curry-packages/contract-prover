@@ -15,3 +15,6 @@ some contracts (and deletes their check in case of success),
 and replaces to FlatCurry program by the optimized version.
 Hence, this call might be integrated into the compilation chain
 of a Curry system.
+
+The directory `examples` contains various examples where the
+contract prover can eliminate all contracts at compile time.
