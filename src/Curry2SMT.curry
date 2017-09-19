@@ -2,33 +2,20 @@
 --- A tool to translate FlatCurry operations into SMT assertions.
 ---
 --- @author  Michael Hanus
---- @version July 2017
+--- @version September 2017
 ---------------------------------------------------------------------------
 
 module Curry2SMT where
 
-import FlatCurry.Files
-import List         ( find, nub )
-import Maybe        ( fromJust )
-import System       ( exitWith )
+import Maybe        ( fromMaybe )
 
 -- Imports from dependencies:
-import FlatCurry.Annotated.Goodies
-import FlatCurry.Annotated.Pretty        ( ppProg, ppExp )
+import FlatCurry.Annotated.Goodies ( argTypes, resultType )
 import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.TypeInference ( inferProg )
 
 -- Imports from package modules:
 import BoolExp
-
-
--- Type synomyms for type-annotated FlatCurry entities:
-type TAProg       = AProg       TypeExpr
-type TAFuncDecl   = AFuncDecl   TypeExpr
-type TARule       = ARule       TypeExpr
-type TAExpr       = AExpr       TypeExpr
-type TABranchExpr = ABranchExpr TypeExpr
-type TAPattern    = APattern    TypeExpr
+import TypedFlatCurryGoodies
 
 -- Testing:
 m1 :: IO ()
@@ -134,7 +121,8 @@ lit2bool (Charc i)  = BTerm (show i) []
 --- Translates a qualified FlatCurry name into an SMT string.
 transOpName :: QName -> String
 transOpName (mn,fn)
- | mn=="Prelude" = maybe (mn ++ "_" ++ fn) id (lookup fn (primCons ++ primOps))
+ | mn=="Prelude" = fromMaybe (mn ++ "_" ++ fn)
+                             (lookup fn (primCons ++ preludePrimOps))
  | otherwise     = mn ++ "_" ++ fn
 
 --- Translates an SMT string into qualified FlatCurry name.
@@ -144,109 +132,5 @@ untransOpName s = let (mn,ufn) = break (=='_') s in
  if null ufn
    then Nothing
    else Just (mn, tail ufn)
-
---- Is a qualified FlatCurry name primitive?
-isPrimOp :: QName -> Bool
-isPrimOp (mn,fn) = mn=="Prelude" && fn `elem` map fst primOps
-
---- Primitive operations and their SMT names.
-primOps :: [(String,String)]
-primOps =
-  [("==","=")
-  ,("+","+")
-  ,("-","-")
-  ,("*","*")
-  ,(">",">")
-  ,(">=",">=")
-  ,("<","<")
-  ,("<=","<=")
-  ,("not","not")
-  ,("&&","and")
-  ,("||","or")
-  ]
-
---- Primitive constructors and their SMT names.
-primCons :: [(String,String)]
-primCons =
-  [("True","true")
-  ,("False","false")
-  ,("[]","nil")
-  ,(":","insert")
-  ]
-
-----------------------------------------------------------------------------
---- Reads a type FlatCurry program or exit with a failure message
---- in case of some typing error.
-readTypedFlatCurry :: String -> IO TAProg
-readTypedFlatCurry mname = do
-  prog <- readFlatCurry mname
-  inferProg prog >>=
-    either (\e -> putStrLn ("Error during FlatCurry type inference:\n" ++ e) >>
-                  exitWith 1)
-           return
-
---- Extract all typed FlatCurry functions that might be called by a given
---- list of functions.
-getAllFunctions :: [TAFuncDecl] -> [TAProg] -> [QName]
-                -> IO [TAFuncDecl]
-getAllFunctions currfuncs _ [] = return (reverse currfuncs)
-getAllFunctions currfuncs currmods (newfun:newfuncs)
-  | newfun `elem` standardConstructors ++ map funcName currfuncs
-    || isPrimOp newfun
-  = getAllFunctions currfuncs currmods newfuncs
-  | fst newfun `elem` map progName currmods
-  = maybe
-      (-- if we don't find the qname, it must be a constructor:
-       getAllFunctions currfuncs currmods newfuncs)
-      (\fdecl -> getAllFunctions
-                    (fdecl : currfuncs)
-                    currmods (newfuncs ++ nub (funcsOfFuncDecl fdecl)))
-      (find (\fd -> funcName fd == newfun)
-            (progFuncs
-               (fromJust (find (\m -> progName m == fst newfun) currmods))))
-  | otherwise -- we must load a new module
-  = do let mname = fst newfun
-       putStrLn $ "Loading module '" ++ mname ++ "'..."
-       newmod <- readTypedFlatCurry mname
-       getAllFunctions currfuncs (newmod:currmods) (newfun:newfuncs)
-
---- Returns the names of all functions/constructors occurring in the
---- body of a function declaration.
-funcsOfFuncDecl :: TAFuncDecl -> [QName]
-funcsOfFuncDecl fd =
-  nub (trRule (\_ _ e -> funcsOfExp e) (\_ _ -> []) (funcRule fd))
- where
-  funcsOfExp = trExpr (\_ _ -> [])
-                      (\_ _ -> [])
-                      (\_ _ (qn,_) fs -> qn : concat fs)
-                      (\_ bs fs -> concatMap snd bs ++ fs)
-                      (\_ _ -> id)
-                      (\_ -> (++))
-                      (\_ _ fs fss -> concat (fs:fss))
-                      (\_ -> id)
-                      (\_ fs _ -> fs)
-
---- Returns `True` if the expression is non-deterministic,
---- i.e., if `Or` or `Free` occurs in the expression.
-ndExpr :: TAExpr -> Bool
-ndExpr = trExpr (\_ _ -> False)
-                (\_ _ -> False)
-                (\_ _ _ nds -> or nds)
-                (\_ bs nd -> nd || any snd bs)
-                (\_ _ _ -> True)
-                (\_ _ _ -> True)
-                (\_ _ nd bs -> nd || or bs)
-                (\_ -> id)
-                (\_ nd _ -> nd)
-
--- Some standard constructors from the prelude.
-standardConstructors :: [QName]
-standardConstructors = [pre "[]", pre ":", pre "()"]
-
-pre :: String -> QName
-pre f = ("Prelude",f)
-
-showQName :: QName -> String
-showQName (mn,fn) = mn ++ "." ++ fn
 
 ----------------------------------------------------------------------------

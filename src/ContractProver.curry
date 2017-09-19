@@ -5,11 +5,15 @@
 --- @author  Michael Hanus
 --- @version September 2017
 ---------------------------------------------------------------------------
+-- A few things to be done to improve contract checking:
+--
+-- * eta-expand pre- and postconditions (before contract checking)
+--   in order to generate correct SMT formulas
+---------------------------------------------------------------------------
 
 module ContractProver where
 
 import Directory    ( doesFileExist )
-import Distribution ( stripCurrySuffix )
 import FilePath     ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
@@ -17,14 +21,11 @@ import IOExts
 import List         ( deleteBy, elemIndex, find, intersect, isSuffixOf
                     , maximum, minimum, splitOn )
 import Maybe        ( catMaybes )
-import Pretty       ( pPrint )
 import State
 import System       ( getArgs, getEnviron, system )
-import Unsafe
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies
-import FlatCurry.Annotated.Pretty        ( ppProg )
 import FlatCurry.Annotated.Types
 import ShowFlatCurry                     ( showCurryModule )
 
@@ -33,6 +34,7 @@ import BoolExp
 import Curry2SMT
 import PackageConfig ( packagePath )
 import ProverOptions
+import TypedFlatCurryGoodies
 
 -- Just for testing:
 m :: IO ()
@@ -48,7 +50,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 15/09/17)"
+   bannerText = "Contract Optimization Tool (Version of 19/09/17)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
@@ -466,12 +468,20 @@ applyFunc fdecl args s0 =
   let (ARule _ orgargs orgexp) = funcRule fdecl
       exp = rnmAllVars (renameRuleVar orgargs) orgexp
       s1  = s0 { freshVar = max (freshVar s0)
-                                   (maximum (0 : args ++ allVars exp) + 1) }
-  in (exp, s1)
+                                (maximum (0 : args ++ allVars exp) + 1) }
+  in (applyArgs exp (drop (length orgargs) args), s1)
  where
+  -- renaming function for variables in original rule:
   renameRuleVar orgargs r = maybe (r + freshVar s0)
                                   (args!!)
                                   (elemIndex r (map fst orgargs))
+
+  applyArgs e [] = e
+  applyArgs e (v:vs) =
+    -- simple hack for eta-expansion since the type annotations are not used:
+    let e_v =  AComb failed FuncCall
+                     (("Prelude","apply"),failed) [e, AVar failed v]
+    in applyArgs e_v vs
 
 -- Translates a Boolean FlatCurry expression into a Boolean formula.
 -- Calls to user-defined functions are replaced by the first argument
@@ -481,14 +491,22 @@ pred2bool exp = case exp of
   AVar _ i              -> returnS (BVar i)
   ALit _ l              -> returnS (lit2bool l)
   AComb _ _ (qf,_) args ->
-    if qf == ("Prelude","not") && length args == 1
+    if qf == pre "not" && length args == 1
       then pred2bool (head args) `bindS` \barg -> returnS (Not barg)
-      else mapS pred2bool args `bindS` \bargs ->
-           returnS (BTerm (transOpName qf) bargs)
+      else
+        if qf == pre "apply" && length args == 2 && isComb (head args)
+          then -- "defunctionalization": if the first argument is a
+               -- combination, append the second argument to its arguments
+               mapS pred2bool args `bindS` \bargs ->
+               case bargs of
+                 [BTerm bn bas, barg2] -> returnS (BTerm bn (bas++[barg2]))
+                 _ -> returnS (BTerm (show exp) []) -- no translation possible
+          else mapS pred2bool args `bindS` \bargs ->
+               returnS (BTerm (transOpName qf) bargs)
   _     -> returnS (BTerm (show exp) [])
 
 
--- Translates an expression to a Boolean formula representing
+-- Translates a FlatCurry expression to a Boolean formula representing
 -- the postcondition assertion by generating an equation
 -- between the argument variable (represented by its index in the first
 -- component) and the translated expression (second component).
