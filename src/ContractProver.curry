@@ -641,7 +641,7 @@ checkImplicationWithSMT opts vartypes assertion impbindings imp = do
               , ""
               , "; check satisfiability:"
               , "(check-sat)"
-              , "; if unsat, we can omit the postcondition check"
+              , "; if unsat, we can omit this part of the contract check"
               ]
   let allsymbols = allSymbolsOfBE (Conj [assertion, impbindings, imp])
       allqsymbols = catMaybes (map untransOpName allsymbols)
