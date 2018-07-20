@@ -7,7 +7,7 @@
 
 module Curry2SMT where
 
-import Maybe        ( fromMaybe )
+import Data.Maybe                  ( fromMaybe )
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies ( argTypes, resultType )
@@ -82,7 +82,7 @@ exp2SMT lhs exp = case exp of
   branches2SMT be (ABranch p e : brs@(_:_)) =
     BTerm "ite" [bEqu be (pat2bool p), branch2SMT be p e,
                  branches2SMT be brs]
-  
+
   branch2SMT _  (ALPattern _ _) e = exp2SMT lhs e
   branch2SMT be (APattern _ (qf,_) ps) e = case ps of
     [] -> exp2SMT lhs e

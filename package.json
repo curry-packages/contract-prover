@@ -7,13 +7,14 @@
     "license": "BSD-3-Clause",
     "licenseFile": "LICENSE",
     "dependencies": {
-        "flatcurry"          : ">= 1.0.0",
-        "flatcurry-annotated": ">= 1.0.0",
-        "showflatcurry": ">= 0.0.1"
+        "flatcurry"          : ">= 3.0.0",
+        "flatcurry-annotated": ">= 3.0.0",
+        "flatcurry-typed"    : ">= 2.0.0",
+        "showflatcurry"      : ">= 2.0.0"
     },
     "compilerCompatibility": {
-        "pakcs": ">= 1.14.0, < 2.0.0",
-        "kics2": ">= 0.5.0, < 2.0.0"
+        "pakcs": ">= 2.0.0",
+        "kics2": ">= 2.0.0"
     },
     "configModule": "PackageConfig",
     "executable": {

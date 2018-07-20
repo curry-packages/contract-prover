@@ -2,8 +2,8 @@
 
 --- This library defines a very simple structure for Boolean expressions
 
-import Char         ( isAlpha )
-import List         ( intercalate, union )
+import Data.Char         ( isAlpha )
+import Data.List         ( intercalate, union )
 
 ---------------------------------------------------------------------------
 --- Datatype for Boolean expressions.

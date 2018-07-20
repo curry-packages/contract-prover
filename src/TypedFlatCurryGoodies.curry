@@ -7,12 +7,13 @@
 
 module TypedFlatCurryGoodies where
 
-import FlatCurry.Files
-import List         ( find, nub )
-import Maybe        ( fromJust )
-import System       ( exitWith )
+import Data.List       ( find, nub )
+import Data.Maybe      ( fromJust )
+import System.Process  ( exitWith )
 
 -- Imports from dependencies:
+import FlatCurry.Files
+import FlatCurry.Typed.Files (readTypedFlatCurryAsAnnotated)
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
 import FlatCurry.Annotated.TypeInference ( inferProg )
@@ -24,17 +25,6 @@ type TARule       = ARule       TypeExpr
 type TAExpr       = AExpr       TypeExpr
 type TABranchExpr = ABranchExpr TypeExpr
 type TAPattern    = APattern    TypeExpr
-
-----------------------------------------------------------------------------
---- Reads a type FlatCurry program or exit with a failure message
---- in case of some typing error.
-readTypedFlatCurry :: String -> IO TAProg
-readTypedFlatCurry mname = do
-  prog <- readFlatCurry mname
-  inferProg prog >>=
-    either (\e -> putStrLn ("Error during FlatCurry type inference:\n" ++ e) >>
-                  exitWith 1)
-           return
 
 --- Extract all user-defined typed FlatCurry functions that might be called
 --- by a given list of functions.
@@ -58,7 +48,7 @@ getAllFunctions currfuncs currmods (newfun:newfuncs)
   | otherwise -- we must load a new module
   = do let mname = fst newfun
        putStrLn $ "Loading module '" ++ mname ++ "'..."
-       newmod <- readTypedFlatCurry mname
+       newmod <- readTypedFlatCurryAsAnnotated mname
        getAllFunctions currfuncs (newmod:currmods) (newfun:newfuncs)
 
 --- Returns the names of all functions/constructors occurring in the

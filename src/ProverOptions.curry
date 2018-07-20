@@ -8,10 +8,10 @@
 module ProverOptions( Options(..), defaultOptions, processOptions )
  where
 
-import Distribution      ( stripCurrySuffix )
-import GetOpt
-import ReadNumeric       ( readNat )
-import System            ( exitWith )
+import Distribution          ( stripCurrySuffix )
+import Numeric               ( readNat )
+import System.Process        ( exitWith )
+import System.Console.GetOpt
 
 data Options = Options
   { optVerb    :: Int    -- verbosity (0: quiet, 1: status, 2: interm, 3: all)
@@ -20,7 +20,7 @@ data Options = Options
   , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
                          -- in this case, we assume that all operations are
                          -- strictly evaluated which might give better results
-                         -- but not not be correct if some argument is not
+                         -- but might not be correct if some argument is not
                          -- demanded (TODO: add demand analysis to make it
                          -- safe and powerful)
   }
@@ -44,7 +44,7 @@ processOptions banner argv = do
 -- Help text
 usageText :: String
 usageText = usageInfo ("Usage: curry-ctopt [options] <module names>\n") options
-  
+
 -- Definition of actual command line options.
 options :: [OptDescr (Options -> Options)]
 options =
@@ -62,10 +62,9 @@ options =
   ]
  where
   safeReadNat opttrans s opts =
-   let numError = error "Illegal number argument (try `-h' for help)"
-   in maybe numError
-            (\ (n,rs) -> if null rs then opttrans n opts else numError)
-            (readNat s)
+    case readNat s of
+      [(n,"")] -> opttrans n opts
+      _        -> error "Illegal number argument (try `-h' for help)"
 
   checkVerb n opts = if n>=0 && n<4
                      then opts { optVerb = n }
