@@ -1,6 +1,6 @@
 {
   "name": "contract-prover",
-    "version": "0.0.1",
+    "version": "2.0.0",
     "author": "Michael Hanus <mh@informatik.uni-kiel.de>",
     "synopsis": "A tool to optimize contracts in FlatCurry programs by proving contracts",
     "category": [ "Optimization", "Verification" ],
