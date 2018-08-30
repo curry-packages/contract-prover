@@ -6,6 +6,9 @@ by proving contracts with an SMT solver. If the proof is successful,
 the contract check will be eliminated so that the resulting program
 will run more efficiently.
 
+A detailed description of the ideas of this tool can be found in the
+[LOPSTR 2017 paper](https://dx.doi.org/10.1007/978-3-319-94460-9_19).
+
 The tool is invoked via
 
     > curry-ctopt <Curry module>
