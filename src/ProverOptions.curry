@@ -23,10 +23,11 @@ data Options = Options
                          -- but not not be correct if some argument is not
                          -- demanded (TODO: add demand analysis to make it
                          -- safe and powerful)
+  , optNoProof :: Bool   -- do not write scripts of successful proofs
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False True False
+defaultOptions = Options 1 False True False False
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -59,6 +60,8 @@ options =
            "do not write optimized program"
   , Option "s" ["strict"] (NoArg (\opts -> opts { optStrict = True }))
            "check contracts w.r.t. strict evaluation strategy"
+  , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))
+           "do not write scripts of successful proofs"
   ]
  where
   safeReadNat opttrans s opts =

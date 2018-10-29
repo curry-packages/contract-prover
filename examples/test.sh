@@ -7,7 +7,7 @@ if [ "$1" = "-v" ] ; then
 fi
 
 # Options for the contract prover
-CPOPTS=-s
+CPOPTS="-s --noproof"
 
 /bin/rm -rf .curry
 ECODE=0

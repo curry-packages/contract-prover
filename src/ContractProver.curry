@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version September 2017
+--- @version October 2018
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -20,14 +20,14 @@ import FlatCurry.Types
 import IOExts
 import List         ( deleteBy, elemIndex, find, intersect, isSuffixOf
                     , maximum, minimum, splitOn )
-import Maybe        ( catMaybes )
+import Maybe        ( catMaybes, isJust )
 import State
 import System       ( getArgs, getEnviron, system )
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
-import ShowFlatCurry                     ( showCurryModule )
+import ShowFlatCurry               ( showCurryModule )
 
 -- Imports from package modules:
 import BoolExp
@@ -50,7 +50,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Optimization Tool (Version of 19/09/17)"
+   bannerText = "Contract Optimization Tool (Version of 29/10/18)"
    bannerLine = take (length bannerText) (repeat '=')
 
 ---------------------------------------------------------------------------
@@ -274,8 +274,9 @@ optPreConditionInRule opts ti (mn,fn) (ARule rty rargs rhs) statsref = do
                   (bindexps   ,pts2) = mapS (exp2bool True ti) bs pts1
                   (precondcall,pts3) = preCondExpOf ti qf (map fst bs) pts2
               -- TODO: select from 'bindexps' only demanded argument positions
-              pcvalid <- checkImplicationWithSMT opts (varTypes pts3)
+              pcproof <- checkImplicationWithSMT opts (varTypes pts3)
                            (preCond pts) (Conj bindexps) precondcall
+              let pcvalid = isJust pcproof
               modifyIORef statsref
                           (addPreCondToStats (snd qf ++ "("++fn++")") pcvalid)
               if pcvalid
@@ -379,18 +380,23 @@ provePostCondition opts ti wopostfun allfuns stats = do
                                 pred2bool) s1
     printWhenStatus opts $
       "Trying to prove postcondition of '" ++ mainfunc ++ "'..."
-    pcvalid <- checkImplicationWithSMT opts (varTypes s2)
+    pcproof <- checkImplicationWithSMT opts (varTypes s2)
                                        (Conj [precondformula, bodyformula])
                                        bTrue postcondformula
-    let nstats = addPostCondToStats mainfunc pcvalid stats
-    if pcvalid
-      then do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK REMOVED"
-              let newpostcheckfun = updFuncRule (const (funcRule wopostfun))
-                                                postcheckfun
-              return (deleteBy (\f g -> funcName f == funcName g) wopostfun
-                               (updFuncDecl newpostcheckfun allfuns), nstats)
-      else do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK unchanged"
-              return (allfuns, nstats)
+    let nstats = addPostCondToStats mainfunc (isJust pcproof) stats
+    maybe
+      (do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK unchanged"
+          return (allfuns, nstats) )
+      (\proof -> do
+         unless (optNoProof opts) $
+           writeFile ("PROOF_" ++ showQNameNoDots orgqn ++
+                      "SatisfiesPostCondition.smt") proof
+         printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK REMOVED"
+         let newpostcheckfun = updFuncRule (const (funcRule wopostfun))
+                                           postcheckfun
+         return (deleteBy (\f g -> funcName f == funcName g) wopostfun
+                          (updFuncDecl newpostcheckfun allfuns), nstats) )
+      pcproof
 
 -- Find the postcondition operation and the operation which invokes
 -- the postcondition for a given operation without postcondition check:
@@ -624,8 +630,10 @@ addSuffix (mn,fn) s = (mn, fn ++ s)
 ---------------------------------------------------------------------------
 -- Calls the SMT solver to check whether an assertion implies some
 -- (pre/post) condition.
+-- Returns `Nothing` if the proof was not successful, otherwise
+-- the SMT script containing the proof (to obtain `unsat`) is returned.
 checkImplicationWithSMT :: Options -> [(Int,TypeExpr)] -> BoolExp -> BoolExp
-                        -> BoolExp -> IO Bool
+                        -> BoolExp -> IO (Maybe String)
 checkImplicationWithSMT opts vartypes assertion impbindings imp = do
   let smt = unlines
               [ "; Free variables:"
@@ -658,7 +666,9 @@ checkImplicationWithSMT opts vartypes assertion impbindings imp = do
   printWhenIntermediate opts $ "RESULT:\n" ++ out
   unless (null err) $ printWhenIntermediate opts $ "ERROR:\n" ++ err
   let pcvalid = let ls = lines out in not (null ls) && head ls == "unsat"
-  return pcvalid
+  return $ if pcvalid
+             then Just $ "; proved by: z3 -smt2 <SMTFILE>\n\n" ++ smtinput
+             else Nothing
 
 -- Operations axiomatized by specific smt scripts (no longer necessary
 -- since these scripts are now automatically generated by Curry2SMT.funcs2SMT).
@@ -694,5 +704,9 @@ fileInPath file = do
   path <- getEnviron "PATH"
   dirs <- return $ splitOn ":" path
   (liftIO (any id)) $ mapIO (doesFileExist . (</> file)) dirs
+
+-- Shows a qualified name by replacing all dots by underscores.
+showQNameNoDots :: QName -> String
+showQNameNoDots = map (\c -> if c=='.' then '_' else c) . showQName
 
 ---------------------------------------------------------------------------
