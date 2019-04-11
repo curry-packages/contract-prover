@@ -1,4 +1,3 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- last with recursive precondition:
 

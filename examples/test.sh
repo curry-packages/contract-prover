@@ -15,9 +15,9 @@ FAILEDTESTS=
 
 for p in *.curry ; do
   if [ $VERBOSE = yes ] ; then
-    curry-ctopt $CPOPTS $p | tee test.out
+    curry-contracts $CPOPTS $p | tee test.out
   else
-    curry-ctopt $CPOPTS $p > test.out
+    curry-contracts $CPOPTS $p > test.out
   fi
   if [ "`tail -1 test.out`" != "ALL CONTRACTS VERIFIED!" ] ; then
     echo "$p: FULL CONTRACT VERIFICATION FAILED!"

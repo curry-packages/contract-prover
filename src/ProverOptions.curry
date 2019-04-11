@@ -2,20 +2,22 @@
 --- The options of the contract verification tool.
 ---
 --- @author Michael Hanus
---- @version September 2017
+--- @version April 2019
 -------------------------------------------------------------------------
 
 module ProverOptions( Options(..), defaultOptions, processOptions )
  where
 
-import Distribution      ( stripCurrySuffix )
 import GetOpt
 import ReadNumeric       ( readNat )
 import System            ( exitWith )
 
+import System.CurryPath  ( stripCurrySuffix )
+
 data Options = Options
   { optVerb    :: Int    -- verbosity (0: quiet, 1: status, 2: interm, 3: all)
   , optHelp    :: Bool   -- if help info should be printed
+  , optVerify  :: Bool   -- verify contracts (or just add them)?
   , optReplace :: Bool   -- replace FlatCurry program with optimized version?
   , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
                          -- in this case, we assume that all operations are
@@ -27,7 +29,7 @@ data Options = Options
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False True False False
+defaultOptions = Options 1 False True True False False
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -56,6 +58,8 @@ options =
   , Option "v" ["verbosity"]
             (OptArg (maybe (checkVerb 2) (safeReadNat checkVerb)) "<n>")
             "verbosity level:\n0: quiet (same as `-q')\n1: show status messages (default)\n2: show intermediate results (same as `-v')\n3: show all intermediate results and more details"
+  , Option "a" ["add"] (NoArg (\opts -> opts { optVerify = False }))
+           "do not verify contracts, just add contract checking"
   , Option "n" ["nostore"] (NoArg (\opts -> opts { optReplace = False }))
            "do not write optimized program"
   , Option "s" ["strict"] (NoArg (\opts -> opts { optStrict = True }))

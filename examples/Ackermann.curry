@@ -1,9 +1,10 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- Precondition: both arguments are non-negative
+ack'pre :: Int -> Int -> Bool
 ack'pre m n = m>=0 && n>=0
 
 -- Postcondition: the result is greater than the sum of its arguments
+ack'post :: Int -> Int -> Int -> Bool
 ack'post m n r = r > m+n
 
 -- The definition of the Ackermann function. Note that we can

@@ -1,4 +1,3 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- This is an example where the consideration of the evaluation strategy
 -- is important to check the contracts.

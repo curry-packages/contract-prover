@@ -2,3 +2,4 @@
 .curry
 .cpm
 src/PackageConfig.curry
+examples/PROOF*

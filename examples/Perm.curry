@@ -1,5 +1,3 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
-
 
 ins'post :: a -> [a] -> [a] -> Bool
 ins'post _ xs ys = length xs + 1 == length ys
@@ -17,3 +15,4 @@ perm'post xs ys = length xs == length ys
 perm :: [a] -> [a]
 perm []   = []
 perm (x:xs) = ins x (perm xs)
+

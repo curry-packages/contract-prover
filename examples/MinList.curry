@@ -1,9 +1,8 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- We locally define the operations null and length on integer lists
 -- to avoid problems with polymorphism in Z3:
 inull :: [Int] -> Bool
-inull [] = True
+inull []    = True
 inull (_:_) = False
 
 -- last with recursive precondition:

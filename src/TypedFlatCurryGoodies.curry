@@ -2,20 +2,23 @@
 --- Some goodies to deal with type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version September 2017
+--- @version March 2019
 ---------------------------------------------------------------------------
 
 module TypedFlatCurryGoodies where
 
-import FlatCurry.Files
+import IOExts
 import List         ( find, nub )
 import Maybe        ( fromJust )
 import System       ( exitWith )
 
 -- Imports from dependencies:
+import FlatCurry.Annotated.Files   ( readTypedFlatCurry )
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.TypeInference ( inferProg )
+
+import VerifierState
+
 
 -- Type synomyms for type-annotated FlatCurry entities:
 type TAProg       = AProg       TypeExpr
@@ -26,40 +29,35 @@ type TABranchExpr = ABranchExpr TypeExpr
 type TAPattern    = APattern    TypeExpr
 
 ----------------------------------------------------------------------------
---- Reads a type FlatCurry program or exit with a failure message
---- in case of some typing error.
-readTypedFlatCurry :: String -> IO TAProg
-readTypedFlatCurry mname = do
-  prog <- readFlatCurry mname
-  inferProg prog >>=
-    either (\e -> putStrLn ("Error during FlatCurry type inference:\n" ++ e) >>
-                  exitWith 1)
-           return
 
 --- Extract all user-defined typed FlatCurry functions that might be called
 --- by a given list of functions.
-getAllFunctions :: [TAFuncDecl] -> [TAProg] -> [QName]
-                -> IO [TAFuncDecl]
-getAllFunctions currfuncs _ [] = return (reverse currfuncs)
-getAllFunctions currfuncs currmods (newfun:newfuncs)
-  | newfun `elem` standardConstructors ++ map funcName currfuncs
-    || isPrimOp newfun
-  = getAllFunctions currfuncs currmods newfuncs
-  | fst newfun `elem` map progName currmods
-  = maybe
-      (-- if we don't find the qname, it must be a constructor:
-       getAllFunctions currfuncs currmods newfuncs)
-      (\fdecl -> getAllFunctions
-                    (fdecl : currfuncs)
-                    currmods (newfuncs ++ nub (funcsOfFuncDecl fdecl)))
-      (find (\fd -> funcName fd == newfun)
-            (progFuncs
-               (fromJust (find (\m -> progName m == fst newfun) currmods))))
-  | otherwise -- we must load a new module
-  = do let mname = fst newfun
-       putStrLn $ "Loading module '" ++ mname ++ "'..."
-       newmod <- readTypedFlatCurry mname
-       getAllFunctions currfuncs (newmod:currmods) (newfun:newfuncs)
+getAllFunctions :: IORef VState -> [TAFuncDecl] -> [QName] -> IO [TAFuncDecl]
+getAllFunctions vstref currfuncs newfuns = do
+  currmods <- readIORef vstref >>= return . currTAProgs
+  getAllFuncs currmods newfuns
+ where
+  getAllFuncs _ [] = return (reverse currfuncs)
+  getAllFuncs currmods (newfun:newfuncs)
+    | newfun `elem` standardConstructors ++ map funcName currfuncs
+      || isPrimOp newfun
+    = getAllFunctions vstref currfuncs newfuncs
+    | fst newfun `elem` map progName currmods
+    = maybe
+        (-- if we don't find the qname, it must be a constructor:
+         getAllFunctions vstref currfuncs newfuncs)
+        (\fdecl -> getAllFunctions vstref
+                      (fdecl : currfuncs)
+                      (newfuncs ++ nub (funcsOfFuncDecl fdecl)))
+        (find (\fd -> funcName fd == newfun)
+              (progFuncs
+                 (fromJust (find (\m -> progName m == fst newfun) currmods))))
+    | otherwise -- we must load a new module
+    = do let mname = fst newfun
+         putStrLn $ "Loading module '" ++ mname ++ "' for '"++ snd newfun ++"'"
+         newmod <- readTypedFlatCurry mname
+         modifyIORef vstref (addProgToState newmod)
+         getAllFunctions vstref currfuncs (newfun:newfuncs)
 
 --- Returns the names of all functions/constructors occurring in the
 --- body of a function declaration.
@@ -99,42 +97,120 @@ isPrimOp (mn,fn) = mn=="Prelude" && fn `elem` map fst preludePrimOps
 preludePrimOps :: [(String,String)]
 preludePrimOps =
   [("==","=")
-  ,("+","+")
-  ,("-","-")
-  ,("negate","-")
-  ,("*","*")
-  ,("div","div")
-  ,("mod","mod")
-  ,("rem","rem")
-  ,(">",">")
-  ,(">=",">=")
-  ,("<","<")
-  ,("<=","<=")
+  ,("_impl#==#Prelude.Eq#Prelude.Int","=")
+  ,("/=","/=")  -- will be translated as negated '='
+  ,("_impl#+#Prelude.Num#Prelude.Int","+")
+  ,("_impl#-#Prelude.Num#Prelude.Int","-")
+  ,("_impl#*#Prelude.Num#Prelude.Int","*")
+  ,("_impl#negate#Prelude.Num#Prelude.Int","-")
+  ,("_impl#div#Prelude.Integral#Prelude.Int","div")
+  ,("_impl#mod#Prelude.Integral#Prelude.Int","mod")
+  ,("_impl#rem#Prelude.Integral#Prelude.Int","rem")
+  ,("_impl#>#Prelude.Ord#Prelude.Int",">")
+  ,("_impl#<#Prelude.Ord#Prelude.Int","<")
+  ,("_impl#>=#Prelude.Ord#Prelude.Int",">=")
+  ,("_impl#<=#Prelude.Ord#Prelude.Int","<=")
+  ,("_impl#>#Prelude.Ord#Prelude.Float",">")
+  ,("_impl#<#Prelude.Ord#Prelude.Float","<")
+  ,("_impl#>=#Prelude.Ord#Prelude.Float",">=")
+  ,("_impl#<=#Prelude.Ord#Prelude.Float","<=")
+  ,("_impl#>#Prelude.Ord#Prelude.Char",">")
+  ,("_impl#<#Prelude.Ord#Prelude.Char","<")
+  ,("_impl#>=#Prelude.Ord#Prelude.Char",">=")
+  ,("_impl#<=#Prelude.Ord#Prelude.Char","<=")
   ,("not","not")
   ,("&&","and")
   ,("||","or")
-  ,("apply","") -- SMT name not used
+  ,("otherwise","true")
+  ,("apply","apply") -- SMT name not used
   ]
 
---- Primitive constructors and their SMT names.
+--- Primitive constructors from the prelude and their SMT names.
 primCons :: [(String,String)]
 primCons =
   [("True","true")
   ,("False","false")
   ,("[]","nil")
   ,(":","insert")
+  ,("(,)","mk-pair")
+  ,("LT","LT")
+  ,("EQ","EQ")
+  ,("GT","GT")
+  ,("Nothing","Nothing")
+  ,("Just","Just")
+  ,("Left","Left")
+  ,("Right","Right")
   ]
 
 -- Some standard constructors from the prelude.
 standardConstructors :: [QName]
-standardConstructors = [pre "[]", pre ":", pre "()"]
+standardConstructors =
+  map (pre . fst) primCons ++ [pre "()", pre "(,)", pre "(,,)"]
+
+----------------------------------------------------------------------------
+-- Smart constructors for type expressions.
+
+--- A base FlatCurry type.
+baseType :: QName -> TypeExpr
+baseType t = TCons t []
+
+-- Type `()` as a FlatCurry type.
+unitType :: TypeExpr
+unitType = baseType (pre "()")
+
+-- Type `Char` as a FlatCurry type.
+charType :: TypeExpr
+charType = baseType (pre "Char")
+
+-- Type `Bool` as a FlatCurry type.
+boolType :: TypeExpr
+boolType = baseType (pre "Bool")
+
+--- Constructs a list type from an element type.
+listType :: TypeExpr -> TypeExpr
+listType a = TCons (pre "[]") [a]
+
+-- Type `String` as a FlatCurry type.
+stringType :: TypeExpr
+stringType = listType charType
+
+--- Constructs a tuple type from list of component types.
+tupleType :: [TypeExpr] -> TypeExpr
+tupleType ts
+ | n==0 = baseType (pre "()")
+ | n==1 = head ts
+ | otherwise = TCons (tupleCons n) ts
+ where n = length ts
+
+----------------------------------------------------------------------------
+-- Smart constructors for expressions.
+
+--- Constructs a tuple expression.
+tupleExpr :: [TAExpr] -> TAExpr
+tupleExpr xs = case length xs of
+    0 -> AComb unitType ConsCall (pre "()", unitType) []
+    1 -> head xs
+    n -> let tys = map annExpr xs
+             tt  = tupleType tys
+             ft  = foldr FuncType tt tys
+         in AComb tt ConsCall (tupleCons n, ft) xs
+
+-- Transforms a string into typed FlatCurry representation.
+string2TFCY :: String -> TAExpr
+string2TFCY [] = AComb stringType ConsCall (pre "[]",stringType) []
+string2TFCY (c:cs) =
+  AComb stringType ConsCall
+        (pre ":", FuncType charType (FuncType stringType stringType))
+        [ALit charType (Charc c), string2TFCY cs]
 
 ----------------------------------------------------------------------------
 
+--- Generates an `n`-ary tuple constructor (only meaningful for `n>1`).
+tupleCons :: Int -> QName
+tupleCons n = pre ('(' : take (n-1) (repeat ',') ++ ")")
+
+--- Transforms a name into a qualified name from the prelude.
 pre :: String -> QName
 pre f = ("Prelude",f)
-
-showQName :: QName -> String
-showQName (mn,fn) = mn ++ "." ++ fn
 
 ----------------------------------------------------------------------------

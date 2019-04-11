@@ -1,4 +1,3 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- This program contains an example of a non-deterministic contract.
 -- Such a contract must be satisfied for each non-deterministic choice.
@@ -14,6 +13,7 @@ choiceBool _ b = b
 -- A non-deterministic precondition is satisfied if each non-deterministic
 -- choice is satisfied. Hence, this precondition expresses the requirement
 -- that the argument must be positive and less than 100.
+f'pre :: Int -> Bool
 f'pre x = choiceBool (x>0) (x<100)
 
 f :: Int -> Int

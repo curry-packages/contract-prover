@@ -1,4 +1,3 @@
-{-# OPTIONS_CYMAKE -F --pgmF=currypp --optF=contracts #-}
 
 -- Postcondition for `conc`:
 conc'post :: [a] -> [a] -> [a] -> Bool
