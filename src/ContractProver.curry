@@ -15,7 +15,7 @@ module ContractProver where
 
 import Directory    ( doesFileExist )
 import IOExts
-import List         ( deleteBy, elemIndex, find, intersect, isSuffixOf
+import List         ( deleteBy, elemIndex, find, init, intersect, isSuffixOf
                     , maximum, minimum, splitOn, union )
 import Maybe        ( catMaybes, isJust )
 import State
@@ -26,10 +26,11 @@ import FilePath                    ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
 import qualified FlatCurry.Goodies as FCG
-import FlatCurry.Annotated.Files   ( readTypedFlatCurry )
+import FlatCurry.Annotated.Files     ( readTypedFlatCurry )
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
-import ShowFlatCurry               ( showCurryModule )
+import FlatCurry.Annotated.TypeSubst ( substRule )
+import ShowFlatCurry                 ( showCurryModule )
 
 -- Imports from package modules:
 import Contract.Names
@@ -55,7 +56,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine,bannerText,bannerLine]
  where
-   bannerText = "Contract Verification/Optimization Tool (Version of 11/04/19)"
+   bannerText = "Contract Verification/Optimization Tool (Version of 12/04/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
@@ -84,7 +85,7 @@ main = do
 -- postconditions or add unverified preconditions.
 proveContracts :: Options -> String -> IO ()
 proveContracts opts mainmodname = do
-  prog <- readTypedFlatCurry mainmodname
+  prog <- readTypedFlatCurryWithSpec opts mainmodname
   let errs = checkContractUsage prog
   if null errs
     then proveContractsInProg opts prog
@@ -124,23 +125,6 @@ writeTransformedProgram progfile prog = do
   writeFCY progfile
            (FCG.updProgFuncs (++ ccfuncs)
                              (FCG.updProgImports (`union` ccimps) prog))
-
----------------------------------------------------------------------------
-
-printWhenStatus :: Options -> String -> IO ()
-printWhenStatus opts s =
-  when (optVerb opts > 0) (printCP s)
-
-printWhenIntermediate :: Options -> String -> IO ()
-printWhenIntermediate opts s =
-  when (optVerb opts > 1) (printCP s)
-
-printWhenAll :: Options -> String -> IO ()
-printWhenAll opts s =
- when (optVerb opts > 2) (printCP s)
-
-printCP :: String -> IO ()
-printCP s = putStrLn $ "CONTRACT PROVER: " ++ s
 
 ---------------------------------------------------------------------------
 -- The state of the transformation process contains
@@ -224,10 +208,10 @@ optPreConditionInRule :: Options -> TransInfo -> QName -> TARule
                       -> IORef VState -> IO TARule
 optPreConditionInRule _ _ _ rl@(AExternal _ _) _ = return rl
 optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
-  let farity = length rargs
+  let targs = zip [1..] (map snd rargs)
       -- compute precondition of operation:
       s0 = makeTransState (maximum (0 : map fst rargs ++ allVars rhs) + 1) rargs
-      (precondformula,s1) = preCondExpOf ti qn [1..farity] s0
+      (precondformula,s1) = preCondExpOf ti qn targs s0
       s2 = s1 { preCond = precondformula }
   newrhs <- optPreCondInExp s2 rhs
   return (ARule rty rargs newrhs)
@@ -243,7 +227,8 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
               printWhenIntermediate opts $ "Checking call to " ++ snd qf
               let ((bs,_)     ,pts1) = normalizeArgs nargs pts
                   (bindexps   ,pts2) = mapS (exp2smt True ti) bs pts1
-                  (precondcall,pts3) = preCondExpOf ti qf (map fst bs) pts2
+                  (precondcall,pts3) = preCondExpOf ti qf
+                                     (zip (map fst bs) (map annExpr args)) pts2
               -- TODO: select from 'bindexps' only demanded argument positions
               pcproof <- checkImplication opts vstref (varTypes pts3)
                            (preCond pts) (tConj bindexps) precondcall
@@ -339,10 +324,12 @@ provePostCondition opts ti postfun allfuns vstref = do
         orgqn           = (postmn, reverse (drop 5 (reverse postfn)))
     --putStrLn $ "Check postcondition of operation " ++ mainfunc
     let farity = funcArity checkfun
+        ftype  = funcType checkfun
+        targsr = zip [1..] (argTypes ftype ++ [resultType ftype])
         (bodyformula,s0) = extractPostConditionProofObligation ti [1 .. farity]
                              (farity+1) (funcRule checkfun)
-        (precondformula,s1)  = preCondExpOf ti orgqn [1 .. farity] s0
-        (postcondformula,s2) = (applyFunc postfun [1 .. farity+1] `bindS`
+        (precondformula,s1)  = preCondExpOf ti orgqn (init targsr) s0
+        (postcondformula,s2) = (applyFunc postfun targsr `bindS`
                                 pred2smt) s1
     printWhenIntermediate opts $
       "Trying to verify postcondition of '" ++ mainfunc ++ "'..."
@@ -393,7 +380,7 @@ extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =
 -- Returns the precondition expression for a given operation
 -- and its arguments (which are assumed to be variable indices).
 -- Rename all local variables by adding the `freshvar` index to them.
-preCondExpOf :: TransInfo -> QName -> [Int] -> State TransState Term
+preCondExpOf :: TransInfo -> QName -> [(Int,TypeExpr)] -> State TransState Term
 preCondExpOf ti qf args =
   maybe (returnS tTrue)
         (\fd -> applyFunc fd args `bindS` pred2smt)
@@ -403,7 +390,7 @@ preCondExpOf ti qf args =
 -- and its arguments (which are assumed to be variable indices).
 -- Rename all local variables by adding `freshvar` to them and
 -- return the new freshvar value.
-postCondExpOf :: TransInfo -> QName -> [Int] -> State TransState Term
+postCondExpOf :: TransInfo -> QName -> [(Int,TypeExpr)] -> State TransState Term
 postCondExpOf ti qf args =
   maybe (returnS tTrue)
         (\fd -> applyFunc fd args `bindS` pred2smt)
@@ -414,14 +401,20 @@ postCondExpOf ti qf args =
 -- the renamed body of the function declaration.
 -- All local variables are renamed by adding `freshvar` to them.
 -- Also the new fresh variable index is returned.
-applyFunc :: TAFuncDecl -> [Int] -> State TransState TAExpr
-applyFunc fdecl args s0 =
-  let (ARule _ orgargs orgexp) = funcRule fdecl
+applyFunc :: TAFuncDecl -> [(Int,TypeExpr)] -> State TransState TAExpr
+applyFunc fdecl targs s0 =
+  let tsub = maybe (error $ "applyFunc: types\n" ++
+                            show (argTypes (funcType fdecl)) ++ "\n" ++
+                            show (map snd targs) ++ "\ndo not match!")
+                   id
+                   (matchTypes (argTypes (funcType fdecl)) (map snd targs))
+      (ARule _ orgargs orgexp) = substRule tsub (funcRule fdecl)
       exp = rnmAllVars (renameRuleVar orgargs) orgexp
       s1  = s0 { freshVar = max (freshVar s0)
                                 (maximum (0 : args ++ allVars exp) + 1) }
   in (applyArgs exp (drop (length orgargs) args), s1)
  where
+  args = map fst targs
   -- renaming function for variables in original rule:
   renameRuleVar orgargs r = maybe (r + freshVar s0)
                                   (args!!)
@@ -441,7 +434,7 @@ pred2smt :: TAExpr -> State TransState Term
 pred2smt exp = case exp of
   AVar _ i              -> returnS (TSVar i)
   ALit _ l              -> returnS (lit2smt l)
-  AComb _ _ (qf,_) args ->
+  AComb _ ct (qf,ftype) args ->
     if qf == pre "not" && length args == 1
       then pred2smt (head args) `bindS` \barg -> returnS (tNot barg)
       else
@@ -453,7 +446,10 @@ pred2smt exp = case exp of
                  [TComb bn bas, barg2] -> returnS (TComb bn (bas++[barg2]))
                  _ -> returnS (tComb (show exp) []) -- no translation possible
           else mapS pred2smt args `bindS` \bargs ->
-               returnS (tComb (transOpName qf) bargs)
+               --returnS (tComb (transOpName qf) bargs)
+               returnS (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
+                                        qf ftype)
+                              bargs)
   _     -> returnS (tComb (show exp) [])
 
 
@@ -471,14 +467,14 @@ exp2smt demanded ti (resvar,exp) = case simpArith exp of
   AVar _ i -> returnS $ if resvar==i then tTrue
                                      else tEquVar resvar (TSVar i)
   ALit _ l -> returnS (tEquVar resvar (lit2smt l))
-  AComb ty _ (qf,_) args ->
+  AComb ty ct (qf,_) args ->
     if qf == pre "?" && length args == 2
       then exp2smt demanded ti (resvar, AOr ty (args!!0) (args!!1))
       else normalizeArgs args `bindS` \ (bs,nargs) ->
            -- TODO: select from 'bindexps' only demanded argument positions
            mapS (exp2smt (isPrimOp qf || optStrict (tiOptions ti)) ti)
                 bs `bindS` \bindexps ->
-           comb2smt qf nargs bs bindexps
+           comb2smt qf ty ct nargs bs bindexps
   ALet _ bs e ->
     mapS (exp2smt False ti)
          (map (\ ((i,_),ae) -> (i,ae)) bs) `bindS` \bindexps ->
@@ -498,27 +494,27 @@ exp2smt demanded ti (resvar,exp) = case simpArith exp of
   ATyped _ e _ -> exp2smt demanded ti (resvar,e)
   AFree _ _ _ -> error "Free variables not yet supported!"
  where
-   comb2smt qf nargs bs bindexps
+   comb2smt qf rtype ct nargs bs bindexps
     | qf == pre "otherwise"
       -- specific handling for the moment since the front end inserts it
       -- as the last alternative of guarded rules...
     = returnS (tEquVar resvar tTrue)
-    | qf == pre "[]"
-    = returnS (tEquVar resvar (tComb "nil" []))
-    | qf == pre ":" && length nargs == 2
+    | ct == ConsCall -- translate data constructor
     = returnS (tConj (bindexps ++
-                     [tEquVar resvar (tComb "insert" (map arg2smt nargs))]))
-    -- TODO: translate also other data constructors into SMT
+                     [tEquVar resvar
+                              (TComb (cons2SMT (null nargs) qf rtype)
+                                     (map arg2smt nargs))]))
     | qf == pre "apply"
     = -- cannot translate h.o. apply: ignore it
       returnS tTrue
     | isPrimOp qf
     = returnS (tConj (bindexps ++
-                     [tEquVar resvar (tComb (transOpName qf)
+                     [tEquVar resvar (TComb (cons2SMT True qf rtype)
                                             (map arg2smt nargs))]))
     | otherwise -- non-primitive operation: add contract only if demanded
-    = preCondExpOf ti qf (map fst bs) `bindS` \precond ->
-      postCondExpOf ti qf (map fst bs ++ [resvar]) `bindS` \postcond ->
+    = let targs = zip (map fst bs) (map annExpr nargs) in
+      preCondExpOf ti qf targs `bindS` \precond ->
+      postCondExpOf ti qf (targs ++ [(resvar,rtype)]) `bindS` \postcond ->
       returnS (tConj (bindexps ++ if demanded then [precond,postcond] else []))
    
    branch2smt (cvar, (ABranch p e)) =
@@ -530,7 +526,6 @@ exp2smt demanded ti (resvar,exp) = case simpArith exp of
      patvars = if isConsPattern p
                  then patArgs p
                  else []
-
 
    arg2smt e = case e of AVar _ i -> TSVar i
                          ALit _ l -> lit2smt l

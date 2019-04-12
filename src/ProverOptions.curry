@@ -1,11 +1,15 @@
 -------------------------------------------------------------------------
---- The options of the contract verification tool.
+--- The options of the contract verification tool together with some
+--- related operations.
 ---
 --- @author Michael Hanus
 --- @version April 2019
 -------------------------------------------------------------------------
 
-module ProverOptions( Options(..), defaultOptions, processOptions )
+module ProverOptions
+  ( Options(..), defaultOptions, processOptions
+  , printWhenStatus, printWhenIntermediate, printWhenAll
+  )
  where
 
 import GetOpt
@@ -79,3 +83,20 @@ options =
                      else error "Illegal verbosity level (try `-h' for help)"
 
 -------------------------------------------------------------------------
+
+printWhenStatus :: Options -> String -> IO ()
+printWhenStatus opts s =
+  when (optVerb opts > 0) (printCP s)
+
+printWhenIntermediate :: Options -> String -> IO ()
+printWhenIntermediate opts s =
+  when (optVerb opts > 1) (printCP s)
+
+printWhenAll :: Options -> String -> IO ()
+printWhenAll opts s =
+ when (optVerb opts > 2) (printCP s)
+
+printCP :: String -> IO ()
+printCP s = putStrLn $ "CONTRACT PROVER: " ++ s
+
+---------------------------------------------------------------------------

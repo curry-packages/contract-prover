@@ -11,4 +11,6 @@ init :: [a] -> [a]
 init [_]          = []
 init (x:xs@(_:_)) = x : init xs
 
---main1 = length (init [1..2000])
+-- Example call:
+main1 :: Int
+main1 = length (init (0 : [1..2000]))

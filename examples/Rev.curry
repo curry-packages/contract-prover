@@ -30,7 +30,8 @@ revAcc :: [a] -> [a] -> [a]
 revAcc xs []     = xs
 revAcc xs (y:ys) = revAcc (y:xs) ys
 
---main1 = isList (rev [1..1000])
+-- Example call:
+main1 = isList (rev [1..1000])
 
 -- Just check the list structure:
 isList :: [a] -> Bool

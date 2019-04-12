@@ -19,3 +19,5 @@
 ; Ordering type:
 (declare-datatypes () ((Ordering (LT) (EQ) (GT))))
 
+; Dict type (to represent dictionary variables):
+(declare-datatypes (T) ((Dict (Dict (dict T)))))

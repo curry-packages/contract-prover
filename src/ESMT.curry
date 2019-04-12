@@ -7,13 +7,13 @@
 --- SMT-LIB language specified in the package `smtlib`.
 ---
 --- @author  Michael Hanus
---- @version March 2019
+--- @version April 2019
 ------------------------------------------------------------------------------
 
 module ESMT where
 
 import List ( (\\), intercalate, isPrefixOf, union )
-
+import Unsafe
 import Data.FiniteMap
 import Text.Pretty
 
@@ -195,11 +195,18 @@ allQIdsOfTerm (Exists _ arg) = allQIdsOfTerm arg
 allQIdsOfTerm (Let bs e)     =
   foldr union [] (map allQIdsOfTerm (e : map snd bs))
 
+-- All possibly sorted identifiers occurring in a define-sig element.
+allQIdsOfSigs :: [([Ident], FunSig, Term)] -> [QIdent]
+allQIdsOfSigs = foldr union [] . map allQIdsOfSig
+ where allQIdsOfSig (_,_,t) = allQIdsOfTerm t
+
 -- TODO: should be extended to all commands but currently sufficient
 allQIdsOfAsserts :: [Command] -> [QIdent]
 allQIdsOfAsserts = foldr union [] . map allQIdsOfAssert
- where allQIdsOfAssert cmd = case cmd of Assert t -> allQIdsOfTerm t
-                                         _        -> []
+
+allQIdsOfAssert :: Command -> [QIdent]
+allQIdsOfAssert cmd = case cmd of Assert t -> allQIdsOfTerm t
+                                  _        -> []
 
 ---------------------------------------------------------------------------
 --- All type parameters occurring in a sort.
@@ -258,12 +265,12 @@ matchSorts (t1:ts1) (t2:ts2) = do
   t <- matchSorts (map (substSort s) ts1)(map (substSort s) ts2)
   return (plusFM s t)
 
---- Applies a sort substitution to a term.
+--- Applies a sort substitution to a sort.
 substSort :: TPSubst -> Sort -> Sort
 substSort sub (SComb sn ss) =
   maybe (SComb sn (map (substSort sub) ss)) id (lookupFM sub sn)
 
---- All type parameters contained in a term.
+--- Applies a sort substitution to a term.
 substTerm :: TPSubst -> Term -> Term
 substTerm sub term = case term of
   TConst _ -> term
@@ -366,46 +373,88 @@ reduceAsInTerm (TComb f ts) = TComb (simpAs f) (map reduceAsInTerm ts)
                            _ -> qid
 
 --------------------------------------------------------------------------
--- Remove parametric polymorphism (provided by `DefineSigsRec`)
+-- Remove parametric polymorphism (supported by `DefineSigsRec`)
 -- in an SMT script.
+-- First, for all QIdents occurring in assertions, their type-instantiated
+-- signatures are added. Then, for all QIdents occurring in these added
+-- operations, their type-instantiated signatures are added and so forth,
+-- until nothing needs to be added.
 unpoly :: [Command] -> [Command]
-unpoly cmds =
-   let allsigs = map sigNameSort (allSigs cmds)
-       allqids = filter ((`elem` (map fst allsigs)) . qidName)
-                         (allQIdsOfAsserts cmds)
-       newcmds = map (addInstsCmd allqids) cmds
-   in map (unpolyCmd allsigs) newcmds
+unpoly commands =
+   let allsigs = map sigNameSort (allSigs commands)
+   in map (unpolyCmd allsigs) . reverse . addSigs [] . reverse $ commands
  where
-  addInstsCmd qids cmd = case cmd of
-    DefineSigsRec fts -> DefineSigsRec $ concatMap (addSigInstances qids) fts
-    _ -> cmd
+  addSigs _    []         = []
+  addSigs qids (cmd:cmds) = case cmd of
+    DefineSigsRec fts ->
+      let (qids1,ftss) = addAllInstancesOfSigs qids qids fts
+      in DefineSigsRec ftss : addSigs qids1 cmds
+    _ -> cmd : addSigs (union (allQIdsOfAssert cmd) qids) cmds
 
   unpolyCmd sigs cmd = case cmd of
-    DefineSigsRec fts -> DefineSigsRec $ map unpolySig fts
-    Assert term -> Assert (rnmQIdWithTInstTerm sigs term)
+    DefineSigsRec fts -> DefineSigsRec $ map rnmTermInSig (map unpolySig fts)
+    Assert term       -> Assert (rnmQIdWithTInstTerm sigs term)
     _ -> cmd
+   where
+    rnmTermInSig (ps,sig,term) = (ps, sig, rnmQIdWithTInstTerm sigs term)
 
   unpolySig (ps, sig, term) =
-    let sub = addListToFM emptyTPSubst (map (\p -> (p,SComb "TVar" [])) ps)
+    let sub = addListToFM emptyTPSubst (map (\p -> (p, SComb "TVar" [])) ps)
     in ([], substFunSig sub sig, substTerm sub term)
 
--- Add to a given (polymorphic) define-sig element all its type instances
--- required by qualified identifiers occurring in the first argument.
-addSigInstances :: [QIdent] -> ([Ident], FunSig, Term)
-                -> [([Ident], FunSig, Term)]
-addSigInstances qids fts@(ps, (FunSig fn ss rs), _) =
-  fts : if null ps then [] -- nothing to be added for monomorphic types
-                   else concatMap addSigInst qids
+-- Transforms a list of signatures into all its instances required by
+-- sorted identifiers (second argument) and also required by sorted
+-- identifiers in the added instances. Returns also the list of
+-- remaining identifiers.
+addAllInstancesOfSigs :: [QIdent] -> [QIdent] -> [([Ident], FunSig, Term)]
+         -> ([QIdent], [([Ident], FunSig, Term)])
+addAllInstancesOfSigs allqids qids fts =
+  if null fts1
+    then (qids1,[])
+    else let (qids2,fts2) = addAllInstancesOfSigs allqids
+                              (union qids1 (allQIdsOfSigs fts1 \\ allqids)) fts
+         in (qids2, fts1 ++ fts2)
  where
-  addSigInst (Id _) = []
-  addSigInst (As n s) =
-    if n == fn
-      then maybe [] (\tsub -> [(rnmDefSig (toTInstName fn ps tsub)
-                                          (substDefSig tsub fts))])
-                 (matchSort (sigTypeAsSort ss rs) s)
-      else []
+  (qids1,fts1) = addInstancesOfSigs qids fts
+
+-- Adds to given (polymorphic) define-sig elements all its type instances
+-- required by qualified identifiers occurring in the first argument.
+-- The list of unused qualified identifiers is also returned.
+addInstancesOfSigs :: [QIdent] -> [([Ident], FunSig, Term)]
+                   -> ([QIdent], [([Ident], FunSig, Term)])
+addInstancesOfSigs qids [] = (qids,[])
+addInstancesOfSigs qids (fts:ftss) =
+  let (qids1,fts1) = addInstancesOfSig qids fts
+      (qids2,fts2) = addInstancesOfSigs qids1 ftss
+  in (qids2, fts1 ++ fts2)
+
+-- Adds to a given (polymorphic) define-sig element all its type instances
+-- required by qualified identifiers occurring in the first argument.
+-- The list of unused qualified identifiers is also returned.
+addInstancesOfSig :: [QIdent] -> ([Ident], FunSig, Term)
+                -> ([QIdent], [([Ident], FunSig, Term)])
+addInstancesOfSig allqids fts@(ps, (FunSig fn ss rs), _) = addSigInsts allqids
+ where
+  addSigInsts []         = ([],[])
+  addSigInsts (qid:qids) =
+    let (qids1,sigs1) = addSigInsts qids
+    in case qid of
+         As n s | n==fn -> (qids1, sigInstForType s ++ sigs1)
+         _              -> (qid : qids1, sigs1)
+
+  sigInstForType s =
+    maybe []
+          (\tsub -> [(rnmDefSig (toTInstName fn ps tsub)
+                                (substDefSig tsub fts))])
+          (matchSort (sigTypeAsSort ss rs) s)
+
+--------------------------------------------------------------------------
 
 -- Rename a sorted name w.r.t. its type instance of the polymorphic function.
+-- For instance,
+--     (As "id" (SComb "Func" [SComb "Int" [], SComb "Int" []]))
+-- will be renamed to
+--     (As "id_Int" (SComb "Func" [SComb "Int" [], SComb "Int" []]))
 rnmQIdWithTInst :: [(Ident, ([Ident],Sort))] -> QIdent -> QIdent
 rnmQIdWithTInst _ (Id n) = Id n
 rnmQIdWithTInst sigs qid@(As n s) =
@@ -415,6 +464,8 @@ rnmQIdWithTInst sigs qid@(As n s) =
                                (matchSort psort s))
         (lookup n sigs)
 
+-- Rename all sorted names occurring in a term w.r.t. its type instance
+-- of the polymorphic function.
 rnmQIdWithTInstTerm :: [(Ident, ([Ident],Sort))] -> Term -> Term
 rnmQIdWithTInstTerm sigs term = case term of
   TConst _ -> term
@@ -438,6 +489,7 @@ addTInstName :: [Ident] -> TPSubst -> Ident -> Ident
 addTInstName ps tsub n =
   n ++ concatMap (\p -> maybe p (('_':) . showSort) (lookupFM tsub p)) ps
 
+-- All signatures in a list of commands.
 allSigs :: [Command] -> [([Ident], FunSig, Term)]
 allSigs = concatMap sigOfCmd
  where sigOfCmd cmd = case cmd of DefineSigsRec fts -> fts

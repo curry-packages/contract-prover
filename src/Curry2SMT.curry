@@ -2,13 +2,13 @@
 --- A tool to translate FlatCurry operations into SMT assertions.
 ---
 --- @author  Michael Hanus
---- @version March 2019
+--- @version April 2019
 ---------------------------------------------------------------------------
 
 module Curry2SMT where
 
 import IOExts
-import List        ( intercalate, isPrefixOf, nub, union )
+import List        ( intercalate, isPrefixOf, isSuffixOf, nub, union )
 import Maybe       ( catMaybes, fromJust, fromMaybe )
 import ReadNumeric ( readHex )
 
@@ -76,14 +76,17 @@ exp2SMT :: Maybe Term -> TAExpr -> Term
 exp2SMT lhs exp = case simpArith exp of
   AVar _ i          -> makeRHS (TSVar i)
   ALit _ l          -> makeRHS (lit2smt l)
-  AComb _ _ (qn,_) args ->
-    makeRHS (tComb (transOpName qn) (map (exp2SMT Nothing) args))
+  AComb _ ct (qn,ftype) args ->
+    --makeRHS (tComb (transOpName qn) (map (exp2SMT Nothing) args))
+    makeRHS (TComb (cons2SMT (ct /= ConsCall || not (null args))
+                                        qn ftype)
+                  (map (exp2SMT Nothing) args))
   ACase _ _ e brs -> let be = exp2SMT Nothing e
                      in branches2SMT be brs
   ALet   _ bs e -> Let (map (\ ((v,_),be) -> (v, exp2SMT Nothing be)) bs)
                        (exp2SMT lhs e)
   ATyped _ e _ -> exp2SMT lhs e
-  AFree  _ fvs e -> Forall (map (\ (v,t) -> SV v (polytype2sort t)) fvs)
+  AFree  _ fvs e -> Forall (map (\ (v,t) -> SV v (polytype2psort t)) fvs)
                            (exp2SMT lhs e)
   AOr    _ e1 e2 -> tDisj [exp2SMT lhs e1, exp2SMT lhs e2]
  where
@@ -112,7 +115,7 @@ patternTest (APattern ty (qf,_) _) be = constructorTest qf be ty
 constructorTest :: QName -> Term -> TypeExpr -> Term
 constructorTest qn be vartype
   | qn == pre "[]"
-  = tEqu be (sortedConst "nil" (polytype2sort vartype))
+  = tEqu be (sortedConst "nil" (polytype2psort vartype))
   | qn `elem` map pre ["[]","True","False","LT","EQ","GT","Nothing"]
   = tEqu be (tComb (transOpName qn) [])
   | qn `elem` map pre ["Just","Left","Right"]
@@ -161,13 +164,16 @@ type2sort tdcl poly _  (TVar i) =
 type2sort tdcl poly _ (FuncType dom ran) =
   SComb "Func" (map (type2sort tdcl poly True) [dom,ran])
 type2sort tdcl poly nested (TCons qc@(mn,tc) targs)
+  | "_Dict#" `isPrefixOf` tc
+  = SComb "Dict" argtypes -- since we do not yet consider class dictionaries...
   | mn=="Prelude" && tc == "Char" -- Char is represented as Int:
   = SComb "Int" []
   | mn=="Prelude" && tc == "[]" && length targs == 1
   = SComb "List" argtypes
   | mn=="Prelude" && tc == "(,)" && length targs == 2
   = SComb "Pair" argtypes
-  | mn=="Prelude" = SComb (encodeSpecialChars tc) argtypes
+  | mn=="Prelude"
+  = SComb (encodeSpecialChars tc) argtypes
   | null tdcl
   = SComb (tcons2SMT qc) argtypes
   | otherwise -- we are in the selector definition of a datatype
@@ -211,6 +217,15 @@ genSelName qc i = "sel" ++ show i ++ '-' : transOpName qc
 
 ----------------------------------------------------------------------------
 
+--- Translates a qualifed name with given result type into an SMT identifier.
+--- If the first argument is true and the result type is not a base type,
+--- the type is attached via `(as ...)` to resolve overloading problems in SMT.
+cons2SMT :: Bool -> QName -> TypeExpr -> QIdent
+cons2SMT withas qf rtype =
+  if withas && not (isBaseType rtype)
+    then As (transOpName qf) (polytype2sort rtype)
+    else Id (transOpName qf)
+  
 --- Translates a pattern into an SMT expression.
 pat2smt :: TAPattern -> Term
 pat2smt (ALPattern _ l)    = lit2smt l

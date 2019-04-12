@@ -2,21 +2,29 @@
 --- Some goodies to deal with type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version March 2019
+--- @version April 2019
 ---------------------------------------------------------------------------
 
 module TypedFlatCurryGoodies where
 
+import Directory    ( doesFileExist )
+import FilePath     ( (</>) )
 import IOExts
-import List         ( find, nub )
+import List         ( find, nub, union )
 import Maybe        ( fromJust )
 import System       ( exitWith )
 
 -- Imports from dependencies:
+import Data.FiniteMap
 import FlatCurry.Annotated.Files   ( readTypedFlatCurry )
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
+import FlatCurry.Annotated.TypeSubst
+import System.CurryPath ( getLoadPathForModule, lookupModuleSource
+                        , stripCurrySuffix )
 
+import PackageConfig ( packagePath )
+import ProverOptions
 import VerifierState
 
 
@@ -29,7 +37,36 @@ type TABranchExpr = ABranchExpr TypeExpr
 type TAPattern    = APattern    TypeExpr
 
 ----------------------------------------------------------------------------
+--- Reads a typed FlatCurry program together with a possible `_SPEC` program
+--- (containing further contracts) or exits with a failure message
+--- in case of some typing error.
+readTypedFlatCurryWithSpec :: Options -> String -> IO TAProg
+readTypedFlatCurryWithSpec opts mname = do
+  printWhenStatus opts $ "Loading typed FlatCurry program '" ++ mname ++ "'"
+  prog     <- readTypedFlatCurry mname
+  loadpath <- getLoadPathForModule specName
+  mbspec   <- lookupModuleSource (loadpath ++ [packagePath </> "include"])
+                                 specName
+  maybe (return prog)
+        (\ (_,specname) -> do
+           let specpath = stripCurrySuffix specname
+           printWhenStatus opts $ 
+             "'" ++ (if optVerb opts > 1 then specpath else specName) ++ "'..."
+           specprog <- readTypedFlatCurry specpath
+           return (unionTAProg prog (rnmProg mname specprog))
+        )
+        mbspec
+ where
+  specName = mname ++ "_SPEC"
 
+--- Returns the union of two typed FlatCurry programs.
+unionTAProg :: TAProg -> TAProg -> TAProg
+unionTAProg (AProg name imps1 types1 funcs1 ops1)
+            (AProg _    imps2 types2 funcs2 ops2) =
+  AProg name (filter (/=name) (union imps1 imps2))
+        (types1++types2) (funcs1++funcs2) (ops1++ops2)
+
+----------------------------------------------------------------------------
 --- Extract all user-defined typed FlatCurry functions that might be called
 --- by a given list of functions.
 getAllFunctions :: IORef VState -> [TAFuncDecl] -> [QName] -> IO [TAFuncDecl]
@@ -54,7 +91,9 @@ getAllFunctions vstref currfuncs newfuns = do
                  (fromJust (find (\m -> progName m == fst newfun) currmods))))
     | otherwise -- we must load a new module
     = do let mname = fst newfun
-         putStrLn $ "Loading module '" ++ mname ++ "' for '"++ snd newfun ++"'"
+         opts <- readTransInfoRef vstref >>= return . tiOptions
+         printWhenStatus opts $
+           "Loading module '" ++ mname ++ "' for '"++ snd newfun ++"'"
          newmod <- readTypedFlatCurry mname
          modifyIORef vstref (addProgToState newmod)
          getAllFunctions vstref currfuncs (newfun:newfuncs)
@@ -202,6 +241,35 @@ string2TFCY (c:cs) =
   AComb stringType ConsCall
         (pre ":", FuncType charType (FuncType stringType stringType))
         [ALit charType (Charc c), string2TFCY cs]
+
+----------------------------------------------------------------------------
+--- Is the type expression a base type?
+isBaseType :: TypeExpr -> Bool
+isBaseType (TVar _)         = False
+isBaseType (TCons _ targs)  = null targs
+isBaseType (FuncType _ _)   = False
+isBaseType (ForallType _ _) = False
+
+----------------------------------------------------------------------------
+--- Compute type matching, i.e., if `matchType t1 t2 = s`, then `t2 = s(t1)`.
+matchType :: TypeExpr -> TypeExpr -> Maybe AFCSubst
+matchType t1 t2 = case (t1,t2) of
+  (TVar v        , _) -> Just $ if t1 == t2 then emptyAFCSubst
+                                            else addToFM emptyAFCSubst v t2
+  (TCons tc1 ts1 , TCons tc2 ts2) | tc1 == tc2 -> matchTypes ts1 ts2
+  (FuncType a1 r1, FuncType a2 r2) -> matchTypes [a1,r1] [a2,r2]
+  (ForallType _ _, _) -> error "matchType: ForallType occurred"
+  (_, ForallType _ _) -> error "matchType: ForallType occurred"
+  _ -> Nothing
+
+matchTypes :: [TypeExpr] -> [TypeExpr] -> Maybe AFCSubst
+matchTypes []       []       = Just emptyAFCSubst
+matchTypes []       (_:_)    = Nothing
+matchTypes (_:_)    []       = Nothing
+matchTypes (t1:ts1) (t2:ts2) = do
+  s <- matchType t1 t2
+  t <- matchTypes (map (subst s) ts1)(map (subst s) ts2)
+  return (plusFM s t)
 
 ----------------------------------------------------------------------------
 

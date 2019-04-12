@@ -14,4 +14,6 @@ minimum :: [Int] -> Int
 minimum [x] = x
 minimum (x:xs@(_:_)) = min x (minimum xs)
 
---main1 = minimum [1..100000]
+-- Example call:
+main1 :: Int
+main1 = minimum (0 : [1..100000])
