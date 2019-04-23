@@ -21,13 +21,17 @@ checkContractUsage prog =
   let mn           = progName prog
       allops       = map nameArityOfFunDecl (progFuncs prog)
       allopsnames  = map fst3 allops
-      specops      = map (\ (n,a,t) -> (fromSpecName n, a, t))
+      specops      = map (\ (n,a,t) ->
+                            (fromSpecName (decodeContractName n), a, t))
                          (funDeclsWithNameArity isSpecName prog)
-      preops       = map (\ (n,a,t) -> (fromPreCondName n, a, t))
+      preops       = map (\ (n,a,t) ->
+                            (fromPreCondName (decodeContractName n), a, t))
                          (funDeclsWithNameArity isPreCondName prog)
-      postops      = map (\ (n,a,t) -> (fromPostCondName n, a-1, t))
+      postops      = map (\ (n,a,t) ->
+                            (fromPostCondName (decodeContractName n), a-1, t))
                          (funDeclsWithNameArity isPostCondName prog)
-      nonfailops   = map (\ (n,a,t) -> (fromNonFailName n, a, t))
+      nonfailops   = map (\ (n,a,t) ->
+                            (fromNonFailName (decodeContractName n), a, t))
                          (funDeclsWithNameArity isNonFailName prog)
       onlyprecond  = map fst3 preops     \\ allopsnames
       onlypostcond = map fst3 postops    \\ allopsnames
