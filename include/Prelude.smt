@@ -4,6 +4,9 @@
 ; For polymorphic types:
 (declare-sort TVar 0)
 
+; Unit type:
+(declare-datatypes () ((Unit (unit))))
+
 ; Pair type:
 (declare-datatypes (T1 T2) ((Pair (mk-pair (first T1) (second T2)))))
 
@@ -21,3 +24,4 @@
 
 ; Dict type (to represent dictionary variables):
 (declare-datatypes (T) ((Dict (Dict (dict T)))))
+

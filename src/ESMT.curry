@@ -13,7 +13,7 @@
 module ESMT where
 
 import List ( (\\), intercalate, isPrefixOf, union )
-import Unsafe
+
 import Data.FiniteMap
 import Text.Pretty
 
@@ -130,6 +130,15 @@ data FunSig = FunSig Ident [Sort] Sort
 data FunDec = FunDec Ident [SortedVar] Sort
   deriving (Eq, Show)
 
+--- A definition of a polymorphic, possibly non-deterministic, operation.
+--- The first component is a list of type paramters
+--- which can be used in the type signature and the term.
+--- The term in the third argument is the axiomatization of the function
+--- definition. Thus, it contains all quantifiers and the equation
+--- `(= (f x1...xn) rhs-term)` so that it can also be used to specify,
+--- by exploiting disjunctions, the meaning of non-deterministic operations.
+type FunSigTerm = ([Ident], FunSig, Term)
+
 --- Commands in SMT script.
 --- The command `DefineSigsRec` is new. It is similar to `DefineFunsRec`,
 --- but the associated term is the axiomatization of the function
@@ -148,7 +157,7 @@ data Command = Assert              Term
              | DeclareFun          Ident [Sort] Sort
              | DeclareSort         Ident Int
              | DefineFunsRec       [(FunDec, Term)]
-             | DefineSigsRec       [([Ident], FunSig, Term)]
+             | DefineSigsRec       [FunSigTerm]
              | EmptyLine
   deriving (Eq, Show)
 
@@ -196,7 +205,7 @@ allQIdsOfTerm (Let bs e)     =
   foldr union [] (map allQIdsOfTerm (e : map snd bs))
 
 -- All possibly sorted identifiers occurring in a define-sig element.
-allQIdsOfSigs :: [([Ident], FunSig, Term)] -> [QIdent]
+allQIdsOfSigs :: [FunSigTerm] -> [QIdent]
 allQIdsOfSigs = foldr union [] . map allQIdsOfSig
  where allQIdsOfSig (_,_,t) = allQIdsOfTerm t
 
@@ -291,7 +300,7 @@ substFunSig :: TPSubst -> FunSig -> FunSig
 substFunSig sub (FunSig fn ss s) =
   FunSig fn (map (substSort sub) ss) (substSort sub s)
 
-substDefSig :: TPSubst -> ([Ident], FunSig, Term) -> ([Ident], FunSig, Term)
+substDefSig :: TPSubst -> FunSigTerm -> FunSigTerm
 substDefSig tsub (ps, fsig, term) =
   (ps \\ keysFM tsub, substFunSig tsub fsig, substTerm tsub term)
 
@@ -332,6 +341,8 @@ simpTerm (Forall vs t) = if null vs then t' else Forall vs t'
 simpTerm (Exists vs t) = if null vs then t' else Exists vs t'
  where t' = simpTerm t
 simpTerm (TComb f ts)
+ | qidName f == "/=" && length ts == 2
+ = simpTerm (TComb (Id "not") [TComb (Id "=") ts])
  | f == Id "apply" && not (null ts')
  = case head ts' of TComb s' ts0 -> TComb s' (ts0 ++ tail ts')
                     _            -> fts
@@ -406,34 +417,41 @@ unpoly commands =
 -- sorted identifiers (second argument) and also required by sorted
 -- identifiers in the added instances. Returns also the list of
 -- remaining identifiers.
-addAllInstancesOfSigs :: [QIdent] -> [QIdent] -> [([Ident], FunSig, Term)]
-         -> ([QIdent], [([Ident], FunSig, Term)])
+addAllInstancesOfSigs :: [QIdent] -> [QIdent] -> [FunSigTerm]
+                      -> ([QIdent], [FunSigTerm])
 addAllInstancesOfSigs allqids qids fts =
   if null fts1
-    then (qids1,[])
+    then (qids1,fts)
     else let (qids2,fts2) = addAllInstancesOfSigs allqids
-                              (union qids1 (allQIdsOfSigs fts1 \\ allqids)) fts
-         in (qids2, fts1 ++ fts2)
+                              (union qids1 (allQIdsOfSigs fts1 \\ allqids))
+                              (fts ++ fts1)
+         in (qids2, fts2)
  where
   (qids1,fts1) = addInstancesOfSigs qids fts
 
 -- Adds to given (polymorphic) define-sig elements all its type instances
--- required by qualified identifiers occurring in the first argument.
+-- required by qualified identifiers occurring in the first argument
+-- provided that it does not already occur in the sig elements.
 -- The list of unused qualified identifiers is also returned.
-addInstancesOfSigs :: [QIdent] -> [([Ident], FunSig, Term)]
-                   -> ([QIdent], [([Ident], FunSig, Term)])
-addInstancesOfSigs qids [] = (qids,[])
-addInstancesOfSigs qids (fts:ftss) =
-  let (qids1,fts1) = addInstancesOfSig qids fts
-      (qids2,fts2) = addInstancesOfSigs qids1 ftss
-  in (qids2, fts1 ++ fts2)
+addInstancesOfSigs :: [QIdent] -> [FunSigTerm]
+                   -> ([QIdent], [FunSigTerm])
+addInstancesOfSigs qids allsigs = addInstsOfSigs qids allsigs
+ where
+  addInstsOfSigs qids0 []         = (qids0,[])
+  addInstsOfSigs qids0 (fts:ftss) =
+    let (qids1,fts1) = addInstancesOfSig qids0 allsigs fts
+        (qids2,fts2) = addInstsOfSigs qids1 ftss
+    in (qids2, fts1 ++ fts2)
 
 -- Adds to a given (polymorphic) define-sig element all its type instances
--- required by qualified identifiers occurring in the first argument.
+-- required by qualified identifiers occurring in the first argument
+-- provided that it does not already occur in the sig elements
+-- contained in the second argument.
 -- The list of unused qualified identifiers is also returned.
-addInstancesOfSig :: [QIdent] -> ([Ident], FunSig, Term)
-                -> ([QIdent], [([Ident], FunSig, Term)])
-addInstancesOfSig allqids fts@(ps, (FunSig fn ss rs), _) = addSigInsts allqids
+addInstancesOfSig :: [QIdent] -> [FunSigTerm] -> FunSigTerm
+                  -> ([QIdent], [FunSigTerm])
+addInstancesOfSig allqids allsigs fts@(ps, (FunSig fn ss rs), _) =
+  addSigInsts allqids
  where
   addSigInsts []         = ([],[])
   addSigInsts (qid:qids) =
@@ -444,8 +462,10 @@ addInstancesOfSig allqids fts@(ps, (FunSig fn ss rs), _) = addSigInsts allqids
 
   sigInstForType s =
     maybe []
-          (\tsub -> [(rnmDefSig (toTInstName fn ps tsub)
-                                (substDefSig tsub fts))])
+          (\tsub -> let rnm = toTInstName fn ps tsub
+                    in if rnm fn `elem` map nameOfSig allsigs
+                         then []
+                         else [(rnmDefSig rnm (substDefSig tsub fts))])
           (matchSort (sigTypeAsSort ss rs) s)
 
 --------------------------------------------------------------------------
@@ -490,17 +510,17 @@ addTInstName ps tsub n =
   n ++ concatMap (\p -> maybe p (('_':) . showSort) (lookupFM tsub p)) ps
 
 -- All signatures in a list of commands.
-allSigs :: [Command] -> [([Ident], FunSig, Term)]
+allSigs :: [Command] -> [FunSigTerm]
 allSigs = concatMap sigOfCmd
  where sigOfCmd cmd = case cmd of DefineSigsRec fts -> fts
                                   _                 -> []
 
 -- The name of a signature.
-nameOfSig :: ([Ident], FunSig, Term) -> Ident
+nameOfSig :: FunSigTerm -> Ident
 nameOfSig (_, FunSig n _ _, _) = n
 
 -- The name and sort of a signature.
-sigNameSort :: ([Ident], FunSig, Term) -> (Ident, ([Ident],Sort))
+sigNameSort :: FunSigTerm -> (Ident, ([Ident],Sort))
 sigNameSort (ps, FunSig n ss s, _) = (n, (ps, sigTypeAsSort ss s))
 
 sigTypeAsSort :: [Sort] -> Sort -> Sort

@@ -57,3 +57,35 @@ The strategy is as follows:
 
    See `include/ContractChecker.curry` for the definition of `checkPreCond`.
 
+---------------------------------------------------------------------------
+
+Notes:
+------
+
+- Contracts can also be stored in separate files.
+  When checking a module `m`, if there is a Curry module `m_SPEC`
+  in the load path, the contents of `m_SPEC` is added to `m` before
+  it is checked.
+
+- Contracts for operators can also be specified by
+  operations named by `op_xh1...hn'`, where each
+  `hi` is a two digit hexadecimal number and the name
+  of the operator corresponds to the ord values of `h1...hn`.
+  For instance, a precondition for the operator `!!` can be named
+  `op_x2121'pre`. To generate such names automatically,
+  one can use the option `--name` of the tool.
+
+---------------------------------------------------------------------------
+
+Directories of the package:
+---------------------------
+
+* examples: some examples (and test suite)
+
+* include: an include file for the SMT solver and a small Curry program
+  containing operations which perform dynamic contract checking
+  for unverified contracts
+
+* src: source code of the implementation
+
+---------------------------------------------------------------------------

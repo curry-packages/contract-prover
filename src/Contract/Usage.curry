@@ -7,18 +7,16 @@
 --- @version April 2019
 ------------------------------------------------------------------------
 
-module Contract.Usage
-  ( checkContractUsage )
- where
+module Contract.Usage ( checkContractUsage ) where
 
 import List
 
 import FlatCurry.Annotated.Goodies
-import FlatCurry.Annotated.Types
+import FlatCurry.Typed.Types
 import Contract.Names
 
 --- Checks the intended usage of contracts.
-checkContractUsage :: AProg TypeExpr -> [(QName,String)]
+checkContractUsage :: TAProg -> [(QName,String)]
 checkContractUsage prog =
   let mn           = progName prog
       allops       = map nameArityOfFunDecl (progFuncs prog)
@@ -29,9 +27,12 @@ checkContractUsage prog =
                          (funDeclsWithNameArity isPreCondName prog)
       postops      = map (\ (n,a,t) -> (fromPostCondName n, a-1, t))
                          (funDeclsWithNameArity isPostCondName prog)
-      onlyprecond  = map fst3 preops  \\ allopsnames
-      onlypostcond = map fst3 postops \\ allopsnames
-      onlyspec     = map fst3 specops \\ allopsnames
+      nonfailops   = map (\ (n,a,t) -> (fromNonFailName n, a, t))
+                         (funDeclsWithNameArity isNonFailName prog)
+      onlyprecond  = map fst3 preops     \\ allopsnames
+      onlypostcond = map fst3 postops    \\ allopsnames
+      onlyspec     = map fst3 specops    \\ allopsnames
+      onlynonfail  = map fst3 nonfailops \\ allopsnames
       errmsg   = "No implementation for this "
       preerrs  = map (\ n -> ((mn, toPreCondName n), errmsg ++ "precondition"))
                      onlyprecond
@@ -39,13 +40,34 @@ checkContractUsage prog =
                      onlypostcond
       specerrs = map (\ n -> ((mn, toSpecName n), errmsg ++ "specification"))
                      onlyspec
-   in preerrs ++ posterrs ++ specerrs ++
-      checkPreTypes  mn allops preops ++
-      checkPostTypes mn allops postops ++
-      checkSpecTypes mn allops specops
+      nferrs   = map (\ n -> ((mn, toNonFailName n),
+                              errmsg ++ "non-fail condition"))
+                     onlynonfail
+   in preerrs ++ posterrs ++ specerrs ++ nferrs ++
+      checkNonFailTypes  mn allops nonfailops ++
+      checkPreTypes      mn allops preops ++
+      checkPostTypes     mn allops postops ++
+      checkSpecTypes     mn allops specops
  where
   fst3 (x,_,_) = x
 
+checkNonFailTypes :: String -> [(String,Int,TypeExpr)]
+                  -> [(String,Int,TypeExpr)] -> [(QName,String)]
+checkNonFailTypes mn allops nfops = concatMap checkNonFailTypeOf nfops
+ where
+  checkNonFailTypeOf (n,_,t) =
+    maybe (notFoundError "non-fail condition" (mn,n))
+          (\ (_,_,ft) -> checkNonFailType n t ft)
+          (find (\ (f,_,_) -> f == n) allops)
+
+  checkNonFailType n pt ft
+    | resultType pt /= TCons ("Prelude","Bool") []
+    = illegalTypeError "Non-fail condition" (mn, toNonFailName n)
+    | argTypes pt /= argTypes ft
+    = wrongTypeError "non-fail condition" (mn, toNonFailName n)
+    | otherwise
+    = []
+ 
 checkPreTypes :: String -> [(String,Int,TypeExpr)] -> [(String,Int,TypeExpr)]
               -> [(QName,String)]
 checkPreTypes mn allops preops = concatMap checkPreTypeOf preops
@@ -107,14 +129,14 @@ wrongTypeError cond qn = [(qn, "Type of " ++ cond ++ " does not match")]
 
 -- Returns, for all function declarations which satisfy the predicate
 -- given as the first argument, the function name, arity, and type.
-funDeclsWithNameArity :: (String -> Bool) -> AProg TypeExpr
+funDeclsWithNameArity :: (String -> Bool) -> TAProg
                       -> [(String,Int,TypeExpr)]
 funDeclsWithNameArity pred prog =
   map nameArityOfFunDecl
       (filter (pred . snd . funcName) (progFuncs prog))
 
 -- Returns the unqualified name, arity, and type from a function declaration.
-nameArityOfFunDecl :: AFuncDecl TypeExpr -> (String,Int,TypeExpr)
+nameArityOfFunDecl :: TAFuncDecl -> (String,Int,TypeExpr)
 nameArityOfFunDecl fd = (snd (funcName fd), length (argTypes ftype), ftype)
  where
   ftype = funcType fd

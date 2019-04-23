@@ -6,7 +6,7 @@
 --- @version April 2019
 -------------------------------------------------------------------------
 
-module ProverOptions
+module ToolOptions
   ( Options(..), defaultOptions, processOptions
   , printWhenStatus, printWhenIntermediate, printWhenAll
   )
@@ -21,6 +21,7 @@ import System.CurryPath  ( stripCurrySuffix )
 data Options = Options
   { optVerb    :: Int    -- verbosity (0: quiet, 1: status, 2: interm, 3: all)
   , optHelp    :: Bool   -- if help info should be printed
+  , optName    :: String -- show only the name of a nonfail condition
   , optVerify  :: Bool   -- verify contracts (or just add them)?
   , optReplace :: Bool   -- replace FlatCurry program with optimized version?
   , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
@@ -33,7 +34,7 @@ data Options = Options
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False True True False False
+defaultOptions = Options 1 False "" True True False False
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -70,6 +71,9 @@ options =
            "check contracts w.r.t. strict evaluation strategy"
   , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))
            "do not write scripts of successful proofs"
+  , Option "" ["name"]
+            (ReqArg (\s opts -> opts { optName = s }) "<f>")
+            "show only the names of pre- and postconditions"
   ]
  where
   safeReadNat opttrans s opts =

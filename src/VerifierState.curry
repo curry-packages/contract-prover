@@ -3,26 +3,26 @@ module VerifierState where
 import IOExts
 import List ( find )
 
-import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.Goodies
-
 import Contract.Names ( isPreCondName, isPostCondName )
-import ProverOptions
+import FlatCurry.Annotated.Goodies ( funcName )
+
+import FlatCurry.Typed.Types
+import ToolOptions
 
 ---------------------------------------------------------------------------
 -- Some global information used by the transformation process:
-data TransInfo = TransInfo
-  { tiOptions     :: Options      -- options passed to all defined operations
-  , allFuns       :: [AFuncDecl TypeExpr] -- all defined operations
-  , preConds      :: [AFuncDecl TypeExpr] -- all precondition operations
-  , postConds     :: [AFuncDecl TypeExpr] -- all postcondition operations
+data VerifyInfo = VerifyInfo
+  { toolOpts      :: Options      -- options passed to the tool
+  , allFuns       :: [TAFuncDecl] -- all defined operations
+  , preConds      :: [TAFuncDecl] -- all precondition operations
+  , postConds     :: [TAFuncDecl] -- all postcondition operations
   }
 
-makeTransInfo :: Options -> [AFuncDecl TypeExpr] -> TransInfo
-makeTransInfo opts fdecls = TransInfo opts fdecls preconds postconds
+makeVerifyInfo :: Options -> [AFuncDecl TypeExpr] -> VerifyInfo
+makeVerifyInfo opts fdecls = VerifyInfo opts fdecls preconds postconds
  where
   -- Precondition operations:
-  preconds  = filter (isPreCondName . snd . funcName) fdecls
+  preconds  = filter (isPreCondName  . snd . funcName) fdecls
   -- Postcondition operations:
   postconds = filter (isPostCondName . snd . funcName) fdecls
 
@@ -31,20 +31,20 @@ makeTransInfo opts fdecls = TransInfo opts fdecls preconds postconds
 -- statistical information and the programs that are already read
 -- (to avoid multiple readings).
 data VState = VState
-  { trInfo      :: TransInfo -- information used by the transformation process
-  , uPreCond    :: [String]  -- unverified preconditions
-  , vPreCond    :: [String]  -- verified preconditions
-  , uPostCond   :: [String]  -- unverified postconditions
-  , vPostCond   :: [String]  -- verified postconditions
-  , currTAProgs :: [AProg TypeExpr]  -- already read typed FlatCurry programs
+  { trInfo      :: VerifyInfo -- information used by the transformation process
+  , uPreCond    :: [String]   -- unverified preconditions
+  , vPreCond    :: [String]   -- verified preconditions
+  , uPostCond   :: [String]   -- unverified postconditions
+  , vPostCond   :: [String]   -- verified postconditions
+  , currTAProgs :: [TAProg]   -- already read typed FlatCurry programs
   }
 
-initVState :: TransInfo -> VState
+initVState :: VerifyInfo -> VState
 initVState ti = VState ti [] [] [] [] []
 
---- Reads TransInfo from VState IORef.
-readTransInfoRef :: IORef VState -> IO TransInfo
-readTransInfoRef vstref = readIORef vstref >>= return . trInfo
+--- Reads VerifyInfo from VState IORef.
+readVerifyInfoRef :: IORef VState -> IO VerifyInfo
+readVerifyInfoRef vstref = readIORef vstref >>= return . trInfo
 
 --- Shows the statistics in human-readable format.
 showStats :: VState -> String

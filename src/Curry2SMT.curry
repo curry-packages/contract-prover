@@ -8,20 +8,20 @@
 module Curry2SMT where
 
 import IOExts
-import List        ( intercalate, isPrefixOf, isSuffixOf, nub, union )
+import List        ( intercalate, isPrefixOf, nub, union )
 import Maybe       ( catMaybes, fromJust, fromMaybe )
 import ReadNumeric ( readHex )
 
 -- Imports from dependencies:
-import FlatCurry.Annotated.Goodies ( argTypes, funcName, funcType, isComb
-                                   , resultType )
-import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.TypeSubst
-import FlatCurry.Types ( showQName )
+import FlatCurry.Annotated.Goodies ( argTypes, resultType )
+import FlatCurry.Types             ( showQName )
 
 -- Imports from package modules:
 import ESMT
-import TypedFlatCurryGoodies
+import FlatCurry.Typed.Read    ( getAllFunctions )
+import FlatCurry.Typed.Goodies
+import FlatCurry.Typed.Names
+import FlatCurry.Typed.Types
 import VerifierState
 
 --- Translates a list of operations specified by their qualified name
@@ -53,34 +53,18 @@ fun2SMT (AFunc qn _ _ texp rule) =
     lhs = tComb (transOpName qn) (map (TSVar . fst) vs)
 
 
--- Since basic arithmetic operations are represented in FlatCurry
--- via access to class dictionaries and `apply` operations,
--- this operations transforms them into standard function calls
--- so that they can be translated into SMT formulas.
-simpArith :: TAExpr -> TAExpr
-simpArith exp = case exp of
-  AComb _ FuncCall (qf,_) args | qf == pre "apply" && isComb (head args)
-    -> -- "defunctionalization": if the first argument is a
-       -- combination, append the second argument to its arguments
-       case map simpArith args of -- TODO: correct typing!
-         [AComb ty ct bn bas, barg2] | isPrimOp (fst bn)
-           -> AComb ty ct bn (bas++[barg2])
-         _ -> exp -- no translation possible
-  _ -> exp
-
--- Translate a typed FlatCurry expression into an SMT expression.
+-- Translates a typed FlatCurry expression into an SMT expression.
 -- If the first argument is an SMT expression, an equation between
 -- this expression and the translated result expression is generated.
 -- This is useful to axiomatize non-deterministic operations.
 exp2SMT :: Maybe Term -> TAExpr -> Term
-exp2SMT lhs exp = case simpArith exp of
+exp2SMT lhs exp = case exp of
   AVar _ i          -> makeRHS (TSVar i)
   ALit _ l          -> makeRHS (lit2smt l)
   AComb _ ct (qn,ftype) args ->
-    --makeRHS (tComb (transOpName qn) (map (exp2SMT Nothing) args))
-    makeRHS (TComb (cons2SMT (ct /= ConsCall || not (null args))
-                                        qn ftype)
-                  (map (exp2SMT Nothing) args))
+    -- TODO: reason about condition `not (null args)`
+    makeRHS (TComb (cons2SMT (ct /= ConsCall || not (null args)) True qn ftype)
+                   (map (exp2SMT Nothing) args))
   ACase _ _ e brs -> let be = exp2SMT Nothing e
                      in branches2SMT be brs
   ALet   _ bs e -> Let (map (\ ((v,_),be) -> (v, exp2SMT Nothing be)) bs)
@@ -108,14 +92,18 @@ exp2SMT lhs exp = case simpArith exp of
 
 patternTest :: TAPattern -> Term -> Term
 patternTest (ALPattern _ l) be = tEqu be (lit2smt l)
-patternTest (APattern ty (qf,_) _) be = constructorTest qf be ty
+patternTest (APattern ty (qf,_) _) be = constructorTest True qf be ty
 
---- Translates a constructor name and a term into a SMT formula
+--- Translates a constructor name and a term into an SMT formula
 --- implementing a test on the term for this constructor.
-constructorTest :: QName -> Term -> TypeExpr -> Term
-constructorTest qn be vartype
+--- If the first argument is true, parametric sorts are used
+--- (i.e., we translate a polymorphic function), otherwise
+--- type variables are translated into the sort `TVar`.
+constructorTest :: Bool -> QName -> Term -> TypeExpr -> Term
+constructorTest withpoly qn be vartype
   | qn == pre "[]"
-  = tEqu be (sortedConst "nil" (polytype2psort vartype))
+  = tEqu be (sortedConst "nil"
+               ((if withpoly then polytype2psort else polytype2sort) vartype))
   | qn `elem` map pre ["[]","True","False","LT","EQ","GT","Nothing"]
   = tEqu be (tComb (transOpName qn) [])
   | qn `elem` map pre ["Just","Left","Right"]
@@ -138,7 +126,7 @@ selectors qf | qf == ("Prelude",":")     = ["head","tail"]
 polytype2sort :: TypeExpr -> Sort
 polytype2sort = type2sort [] False False
 
---- Translates a FlatCurry type expression into a parameter SMT sort.
+--- Translates a FlatCurry type expression into a parametric SMT sort.
 --- Thus, a polymorphic type variable `i` is translated into the sort `TVari`.
 --- These type variables are later processed by the SMT translator.
 polytype2psort :: TypeExpr -> Sort
@@ -160,20 +148,10 @@ polytype2psort = type2sort [] True False
 type2sort :: [QName] -> Bool -> Bool -> TypeExpr -> Sort
 type2sort tdcl poly _  (TVar i) =
   SComb (if null tdcl then "TVar" ++ (if poly then show i else "")
-                      else 'T':show i) []
+                      else 'T' : show i) []
 type2sort tdcl poly _ (FuncType dom ran) =
   SComb "Func" (map (type2sort tdcl poly True) [dom,ran])
 type2sort tdcl poly nested (TCons qc@(mn,tc) targs)
-  | "_Dict#" `isPrefixOf` tc
-  = SComb "Dict" argtypes -- since we do not yet consider class dictionaries...
-  | mn=="Prelude" && tc == "Char" -- Char is represented as Int:
-  = SComb "Int" []
-  | mn=="Prelude" && tc == "[]" && length targs == 1
-  = SComb "List" argtypes
-  | mn=="Prelude" && tc == "(,)" && length targs == 2
-  = SComb "Pair" argtypes
-  | mn=="Prelude"
-  = SComb (encodeSpecialChars tc) argtypes
   | null tdcl
   = SComb (tcons2SMT qc) argtypes
   | otherwise -- we are in the selector definition of a datatype
@@ -192,7 +170,15 @@ type2sort _ _ _ (ForallType _ _) =
 
 --- Translates a FlatCurry type constructor name into SMT.
 tcons2SMT :: QName -> String
-tcons2SMT (mn,tc) = mn ++ "_" ++ encodeSpecialChars tc
+tcons2SMT (mn,tc)
+ | "_Dict#" `isPrefixOf` tc
+ = "Dict" -- since we do not yet consider class dictionaries...
+ | mn == "Prelude" && take 3 tc == "(,,"
+ = "Tuple" ++ show (length tc - 1)
+ | mn == "Prelude"
+ = maybe (encodeSpecialChars tc) id (lookup tc transPrimTCons)
+ | otherwise
+ = mn ++ "_" ++ encodeSpecialChars tc
 
 ----------------------------------------------------------------------------
 --- Translates a type declaration into an SMT datatype declaration.
@@ -213,17 +199,40 @@ tdecl2SMT (Type tc _ tvars consdecls) =
 
 --- Generates the name of the i-th selector for a given constructor.
 genSelName :: QName -> Int -> String
-genSelName qc i = "sel" ++ show i ++ '-' : transOpName qc
+genSelName qc@(mn,fn) i
+ | mn == "Prelude" && take 3 fn == "(,,"
+ = transOpName qc ++ "_" ++ show i
+ | otherwise
+ = "sel" ++ show i ++ '-' : transOpName qc
 
-----------------------------------------------------------------------------
+--- Translates a prelude type into an SMT datatype declaration,
+--- if necessary.
+preludeType2SMT :: String -> [Command]
+preludeType2SMT tn
+ | take 3 tn == "(,,"
+ = let arity = length tn -1
+   in [DeclareDatatypes
+        [(tcons2SMT (pre tn), arity,
+          DT (map (\v -> 'T':show v) [1 .. arity])
+             [DCons (transOpName (pre tn)) (map texp2sel [1 .. arity])])]]
+ | otherwise
+ = []
+ where
+  texp2sel i = (genSelName (pre tn) i, SComb ('T' : show i) [])
+
+---------------------------------------------------------------------------
 
 --- Translates a qualifed name with given result type into an SMT identifier.
 --- If the first argument is true and the result type is not a base type,
 --- the type is attached via `(as ...)` to resolve overloading problems in SMT.
-cons2SMT :: Bool -> QName -> TypeExpr -> QIdent
-cons2SMT withas qf rtype =
+--- If the second argument is true, parametric sorts are used
+--- (i.e., we translate a polymorphic function), otherwise
+--- type variables are translated into the sort `TVar`.
+cons2SMT :: Bool -> Bool -> QName -> TypeExpr -> QIdent
+cons2SMT withas withpoly qf rtype =
   if withas && not (isBaseType rtype)
-    then As (transOpName qf) (polytype2sort rtype)
+    then As (transOpName qf)
+            ((if withpoly then polytype2psort else polytype2sort) rtype)
     else Id (transOpName qf)
   
 --- Translates a pattern into an SMT expression.
@@ -245,7 +254,7 @@ lit2smt (Charc c)  = TConst (TInt (ord c))
 --- Translates a qualified FlatCurry name into an SMT string.
 transOpName :: QName -> String
 transOpName (mn,fn)
- | mn=="Prelude" = fromMaybe tname (lookup fn (primCons ++ preludePrimOps))
+ | mn=="Prelude" = fromMaybe tname (lookup fn (transPrimCons ++ preludePrimOps))
  | otherwise     = tname
  where
   tname = mn ++ "_" ++ encodeSpecialChars fn
@@ -254,7 +263,7 @@ transOpName (mn,fn)
 encodeSpecialChars :: String -> String
 encodeSpecialChars = concatMap encChar
  where
-  encChar c | c `elem` "#$%"
+  encChar c | c `elem` "#$%[]()!,"
             = let oc = ord c
               in ['%', int2hex (oc `div` 16), int2hex(oc `mod` 16)]
             | otherwise = [c]

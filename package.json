@@ -7,6 +7,7 @@
     "license": "BSD-3-Clause",
     "licenseFile": "LICENSE",
     "dependencies": {
+        "base"               : ">= 1.0.0, < 2.0.0",
         "contracts"          : ">= 0.0.1",
         "currypath"          : ">= 0.0.1",
         "finite-map"         : ">= 0.0.1",
