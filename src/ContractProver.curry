@@ -14,6 +14,7 @@
 module ContractProver where
 
 import Directory    ( doesFileExist )
+import Integer      ( ilog )
 import IOExts
 import List         ( deleteBy, elemIndex, find, init, intersect, isSuffixOf
                     , maximum, minimum, splitOn, union )
@@ -241,7 +242,9 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
                   (precondcall,pts3) = preCondExpOf ti qf
                                      (zip (map fst bs) (map annExpr args)) pts2
               -- TODO: select from 'bindexps' only demanded argument positions
-              pcproof <- checkImplication opts vstref (varTypes pts3)
+              let title = "SMT script to verify precondition of '" ++ snd qf ++
+                          "' in function '" ++ fn ++ "'"
+              pcproof <- checkImplication opts vstref title (varTypes pts3)
                            (preCond pts) (tConj bindexps) precondcall
               let pcvalid = isJust pcproof
               modifyIORef vstref
@@ -344,10 +347,11 @@ provePostCondition opts ti postfun allfuns vstref = do
         (precondformula,s1)  = preCondExpOf ti orgqn (init targsr) s0
         (postcondformula,s2) = (applyFunc postfun targsr `bindS`
                                 pred2smt) s1
-    printWhenIntermediate opts $
-      "Trying to verify postcondition of '" ++ mainfunc ++ "'..."
-    pcproof <- checkImplication opts vstref (varTypes s2)
-                 (tConj [precondformula, bodyformula]) tTrue postcondformula
+    let title = "verify postcondition of '" ++ mainfunc ++ "'..."
+    printWhenIntermediate opts $ "Trying to " ++ title
+    pcproof <- checkImplication opts vstref ("SMT script to " ++ title)
+                 (varTypes s2) (tConj [precondformula, bodyformula]) tTrue
+                 postcondformula
     modifyIORef vstref (addPostCondToStats mainfunc (isJust pcproof))
     maybe
       (do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK ADDED"
@@ -554,20 +558,22 @@ unzipBranches (ABranch p e : brs) = (p:xs,e:ys)
  where (xs,ys) = unzipBranches brs
 
 ---------------------------------------------------------------------------
-checkImplication :: Options -> IORef VState -> [(Int,TypeExpr)] -> Term -> Term
-                 -> Term -> IO (Maybe String)
-checkImplication opts vstref vartypes assertion impbindings imp =
+checkImplication :: Options -> IORef VState -> String -> [(Int,TypeExpr)]
+                 -> Term -> Term -> Term -> IO (Maybe String)
+checkImplication opts vstref scripttitle vartypes assertion impbindings imp =
   if optVerify opts
-    then checkImplicationWithSMT opts vstref vartypes assertion impbindings imp
+    then checkImplicationWithSMT opts vstref scripttitle vartypes
+                                 assertion impbindings imp
     else return Nothing
 
 -- Calls the SMT solver to check whether an assertion implies some
 -- (pre/post) condition.
 -- Returns `Nothing` if the proof was not successful, otherwise
 -- the SMT script containing the proof (to obtain `unsat`) is returned.
-checkImplicationWithSMT :: Options -> IORef VState -> [(Int,TypeExpr)]
+checkImplicationWithSMT :: Options -> IORef VState -> String -> [(Int,TypeExpr)]
                         -> Term -> Term -> Term -> IO (Maybe String)
-checkImplicationWithSMT opts vstref vartypes assertion impbindings imp = do
+checkImplicationWithSMT opts vstref scripttitle vartypes
+                        assertion impbindings imp = do
   let allsyms = catMaybes
                   (map (\n -> maybe Nothing Just (untransOpName n))
                        (map qidName
@@ -591,8 +597,8 @@ checkImplicationWithSMT opts vstref vartypes assertion impbindings imp = do
             , Comment "if unsat, we can omit this part of the contract check"
             ]
   smtprelude <- readFile (packagePath </> "include" </> "Prelude.smt")
-  let smtinput = smtprelude ++ showSMT smt
-  printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ smtinput
+  let smtinput = "; " ++ scripttitle ++ "\n\n" ++ smtprelude ++ showSMT smt
+  printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ showWithLineNums smtinput
   printWhenIntermediate opts $ "CALLING Z3..."
   (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:5"] smtinput
   when (ecode>0) $ do printWhenIntermediate opts $ "EXIT CODE: " ++ show ecode
@@ -629,5 +635,13 @@ fileInPath file = do
 -- Shows a qualified name by replacing all dots by underscores.
 showQNameNoDots :: QName -> String
 showQNameNoDots = map (\c -> if c=='.' then '_' else c) . showQName
+
+--- Shows a text with line numbers preceded:
+showWithLineNums :: String -> String
+showWithLineNums txt =
+  let txtlines  = lines txt
+      maxlog    = ilog (length txtlines + 1)
+      showNum n = (take (maxlog - ilog n) (repeat ' ')) ++ show n ++ ": "
+  in unlines . map (uncurry (++)) . zip (map showNum [1..]) $ txtlines
 
 ---------------------------------------------------------------------------
