@@ -23,6 +23,8 @@ import State
 import System       ( exitWith, getArgs, getEnviron, system )
 
 -- Imports from dependencies:
+import Contract.Names
+import Contract.Usage ( checkContractUsage )
 import FilePath                    ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
@@ -33,8 +35,6 @@ import FlatCurry.Annotated.TypeSubst ( substRule )
 import ShowFlatCurry                 ( showCurryModule )
 
 -- Imports from package modules:
-import Contract.Names
-import Contract.Usage ( checkContractUsage )
 import ESMT
 import Curry2SMT
 import FlatCurry.Typed.Build
@@ -61,7 +61,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Verification/Optimization Tool (Version of 23/04/19)"
+   bannerText = "Contract Verification/Optimization Tool (Version of 29/04/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
@@ -98,7 +98,8 @@ main = do
 proveContracts :: Options -> String -> IO ()
 proveContracts opts mainmodname = do
   prog <- readSimpTypedFlatCurryWithSpec opts mainmodname
-  let errs = checkContractUsage prog
+  let errs = checkContractUsage (progName prog)
+               (map (\fd -> (snd (funcName fd), funcType fd)) (progFuncs prog))
   if null errs
     then proveContractsInProg opts prog
     else do putStr $ unlines (map showOpError errs)
