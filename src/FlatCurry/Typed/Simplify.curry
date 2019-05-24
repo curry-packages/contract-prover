@@ -6,7 +6,9 @@
 --- @version April 2019
 ---------------------------------------------------------------------------
 
-module FlatCurry.Typed.Simplify ( simpProg, simpExpr ) where
+module FlatCurry.Typed.Simplify
+  ( simpProg, simpFuncDecl, simpExpr )
+ where
 
 import List ( find, isPrefixOf )
 
@@ -21,6 +23,9 @@ import FlatCurry.Typed.Types
 
 simpProg :: TAProg -> TAProg
 simpProg = updProgExps simpExpr
+
+simpFuncDecl :: TAFuncDecl -> TAFuncDecl
+simpFuncDecl = updFuncBody simpExpr
 
 --- Implements the following transformations:
 --- * simplify equality instance on lists

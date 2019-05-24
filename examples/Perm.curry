@@ -13,6 +13,6 @@ perm'post xs ys = length xs == length ys
 
 --- Compute permutation via non-deterministic list insertion
 perm :: [a] -> [a]
-perm []   = []
+perm []     = []
 perm (x:xs) = ins x (perm xs)
 

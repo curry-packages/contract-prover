@@ -4,7 +4,7 @@ import IOExts
 import List ( find )
 
 import Contract.Names ( isPreCondName, isPostCondName )
-import FlatCurry.Annotated.Goodies ( funcName )
+import FlatCurry.Annotated.Goodies ( funcName, typeName, progName, progTypes )
 
 import FlatCurry.Typed.Types
 import ToolOptions
@@ -79,5 +79,13 @@ addPostCondToStats pc verified vst =
 --- Adds a new typed FlatCurry program to the state.
 addProgToState :: AProg TypeExpr -> VState -> VState
 addProgToState prog vstate = vstate { currTAProgs = prog : currTAProgs vstate }
+
+---------------------------------------------------------------------------
+--- Selects the type declaration of a type constructor from the state.
+tdeclOf :: VState -> QName -> Maybe TypeDecl
+tdeclOf vst tcons@(mn,_) =
+  maybe Nothing
+        (\p -> find (\td -> typeName td == tcons) (progTypes p))
+        (find (\p -> progName p == mn) (currTAProgs vst))
 
 ---------------------------------------------------------------------------
