@@ -19,6 +19,7 @@ import IOExts
 import List         ( deleteBy, elemIndex, find, init, intersect, isSuffixOf
                     , maximum, minimum, partition, splitOn, union )
 import Maybe        ( catMaybes, isJust )
+import ReadShowTerm ( showTerm )
 import State
 import System       ( exitWith, getArgs, getEnviron, system )
 
@@ -29,6 +30,7 @@ import FilePath                    ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
 import qualified FlatCurry.Goodies as FCG
+import FlatCurry.Annotated.Files ( readTypedFlatCurry, typedFlatCurryFileName )
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
 import FlatCurry.Annotated.TypeSubst ( substRule )
@@ -120,20 +122,24 @@ proveContractsInProg opts oprog = do
   prog2 <- verifyPreConditions  opts prog1 vstref
   prog3 <- addPreConditions     opts prog2 vstref
   let unewprog = unAnnProg prog3
+      mname    = progName prog3
   printWhenAll opts $ unlines $
     ["TRANSFORMED PROGRAM WITH CONTRACT CHECKING:", line,
      showCurryModule unewprog, line]
   vst2 <- readIORef vstref
-  when (optReplace opts && areContractsAdded vst2) $ do
-    let newfcyfile = flatCurryFileName (progName prog3)
-    writeTransformedProgram newfcyfile unewprog
-    printWhenStatus opts $ "Transformed programm written to: " ++ newfcyfile
+  when (areContractsAdded vst2) $ do
+    when (optFCY opts) $
+      writeTransformedFCY opts (flatCurryFileName mname) unewprog
+    when (optTFCY opts) $
+      writeTransformedTFCY opts (typedFlatCurryFileName mname) prog3
   printWhenStatus opts (showStats vst2)
  where
   line = take 78 (repeat '-')
 
-writeTransformedProgram :: String -> Prog -> IO ()
-writeTransformedProgram progfile prog = do
+-- Writes the transformed FlatCurry program together with the contents
+-- of the auxiliary `contractCheckerModule`.
+writeTransformedFCY :: Options -> String -> Prog -> IO ()
+writeTransformedFCY opts progfile prog = do
   ccprog <- readFlatCurry contractCheckerModule
   let rnmccprog = FCG.rnmProg (FCG.progName prog) ccprog
       ccimps    = FCG.progImports rnmccprog
@@ -141,6 +147,23 @@ writeTransformedProgram progfile prog = do
   writeFCY progfile
            (FCG.updProgFuncs (++ ccfuncs)
                              (FCG.updProgImports (`union` ccimps) prog))
+  printWhenStatus opts $ "Transformed program written to: " ++ progfile
+
+-- Writes the transformed typed FlatCurry program together with the contents
+-- of the auxiliary `contractCheckerModule`.
+writeTransformedTFCY :: Options -> String -> TAProg -> IO ()
+writeTransformedTFCY opts progfile prog = do
+  ccprog <- readTypedFlatCurry contractCheckerModule
+  let rnmccprog = rnmProg (progName prog) ccprog
+      ccimps    = progImports rnmccprog
+      ccfuncs   = progFuncs rnmccprog
+  writeTFCY progfile
+            (updProgFuncs (++ ccfuncs)
+                          (updProgImports (`union` ccimps) prog))
+  printWhenStatus opts $ "Transformed program written to: " ++ progfile
+ where
+  -- should go into FlatCurry.Annotated.Files
+  writeTFCY file tprog = writeFile file (showTerm tprog)
 
 ---------------------------------------------------------------------------
 -- The state of the transformation process contains
@@ -220,7 +243,7 @@ addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
 --     f xs = checkPreCond (f'NOCHECK xs) (f'pre xs) "f" xs
 --     f'NOCHECK xs = rhs
 addPreConditions :: Options -> TAProg -> IORef VState -> IO TAProg
-addPreConditions opts prog vstref = do
+addPreConditions _ prog vstref = do
   newfuns  <- mapIO addPreCondition (progFuncs prog)
   return (updProgFuncs (const (concat newfuns)) prog)
  where

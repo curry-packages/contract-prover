@@ -3,7 +3,7 @@
 --- related operations.
 ---
 --- @author Michael Hanus
---- @version April 2019
+--- @version May 2019
 -------------------------------------------------------------------------
 
 module ToolOptions
@@ -23,7 +23,8 @@ data Options = Options
   , optHelp    :: Bool   -- if help info should be printed
   , optName    :: String -- show only the name of a nonfail condition
   , optVerify  :: Bool   -- verify contracts (or just add them)?
-  , optReplace :: Bool   -- replace FlatCurry program with optimized version?
+  , optFCY     :: Bool   -- replace FlatCurry program?
+  , optTFCY    :: Bool   -- replace typed FlatCurry program?
   , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
                          -- in this case, we assume that all operations are
                          -- strictly evaluated which might give better results
@@ -34,7 +35,7 @@ data Options = Options
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False "" True True False False
+defaultOptions = Options 1 False "" True True False False False
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -65,8 +66,12 @@ options =
             "verbosity level:\n0: quiet (same as `-q')\n1: show status messages (default)\n2: show intermediate results (same as `-v')\n3: show all intermediate results and more details"
   , Option "a" ["add"] (NoArg (\opts -> opts { optVerify = False }))
            "do not verify contracts, just add contract checking"
-  , Option "n" ["nostore"] (NoArg (\opts -> opts { optReplace = False }))
-           "do not write optimized program"
+  , Option "n" ["nostore"]
+            (NoArg (\opts -> opts { optFCY = False, optTFCY = False }))
+           "do not write transformed FlatCurry program"
+  , Option "t" ["tfcy"]
+            (NoArg (\opts -> opts { optFCY = False, optTFCY = True }))
+           "write transformed *typed* FlatCurry program"
   , Option "s" ["strict"] (NoArg (\opts -> opts { optStrict = True }))
            "check contracts w.r.t. strict evaluation strategy"
   , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))

@@ -14,7 +14,7 @@ fib x | x == 0 = 0
       | otherwise = fib (x-1) + fib (x-2)
 
 
-main = fib 25
+main1 = fib 25
 
 main2 = fib (fib 5)
 
