@@ -118,15 +118,16 @@ proveContractsInProg opts oprog = do
   modifyIORef vstref (addProgToState sprog)
   prog1 <- verifyPostConditions opts oprog vstref
   prog2 <- verifyPreConditions  opts prog1 vstref
-  let unewprog = unAnnProg prog2
+  prog3 <- addPreConditions     opts prog2 vstref
+  let unewprog = unAnnProg prog3
   printWhenAll opts $ unlines $
     ["TRANSFORMED PROGRAM WITH CONTRACT CHECKING:", line,
      showCurryModule unewprog, line]
   vst2 <- readIORef vstref
   when (optReplace opts && areContractsAdded vst2) $ do
-    let newfcyfile = flatCurryFileName (progName prog2)
+    let newfcyfile = flatCurryFileName (progName prog3)
     writeTransformedProgram newfcyfile unewprog
-    printWhenStatus opts $ "Optimized programm written to: " ++ newfcyfile
+    printWhenStatus opts $ "Transformed programm written to: " ++ newfcyfile
   printWhenStatus opts (showStats vst2)
  where
   line = take 78 (repeat '-')
@@ -172,7 +173,7 @@ addPreConditionCheck ty ct qf@(mn,fn) tys args =
   AComb ty FuncCall
     ((mn, "checkPreCond"),
      FuncType ty (FuncType boolType (FuncType stringType (FuncType tt ty))))
-    [ AComb ty ct (qf,tys) args
+    [ AComb ty ct (toNoCheckQName qf,tys) args
     , AComb boolType ct (toPreCondQName qf, pctype) args
     , string2TFCY fn
     , tupleExpr args
@@ -181,6 +182,17 @@ addPreConditionCheck ty ct qf@(mn,fn) tys args =
   argtypes = map annExpr args
   tt       = tupleType argtypes
   pctype   = foldr FuncType boolType argtypes
+
+--- Transform a qualified name into a name of the corresponding function
+--- without precondition checking by adding the suffix "'NOCHECK".
+toNoCheckQName :: (String,String) -> (String,String)
+toNoCheckQName (mn,fn) = (mn, fn ++ "'NOCHECK")
+
+--- Drops a possible "'NOCHECK" suffix from a qualified name.
+fromNoCheckQName :: (String,String) -> (String,String)
+fromNoCheckQName (mn,fn) =
+  (mn, let rf = reverse fn
+       in reverse (drop (if take 8 rf == "KCEHCON'" then 8 else 0) rf))
 
 -- Adds a postcondition check to a program rule of a given operation.
 addPostConditionCheck :: QName -> TARule -> TAExpr
@@ -199,6 +211,35 @@ addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
  where
   args = map (\ (i,t) -> AVar t i) lhs
   tt = tupleType (map annExpr args)
+
+---------------------------------------------------------------------------
+-- Add (non-trivial) preconditions:
+-- If an operation `f` has some precondition `f'pre`,
+-- replace the rule `f xs = rhs` by the following rules:
+--
+--     f xs = checkPreCond (f'NOCHECK xs) (f'pre xs) "f" xs
+--     f'NOCHECK xs = rhs
+addPreConditions :: Options -> TAProg -> IORef VState -> IO TAProg
+addPreConditions opts prog vstref = do
+  newfuns  <- mapIO addPreCondition (progFuncs prog)
+  return (updProgFuncs (const (concat newfuns)) prog)
+ where
+  addPreCondition fdecl@(AFunc qf ar vis fty rule) = do
+    ti <- readVerifyInfoRef vstref
+    return $
+      if toPreCondQName qf `elem` map funcName (preConds ti)
+        then let newrule = checkPreCondRule qf rule
+             in [updFuncRule (const newrule) fdecl,
+                 AFunc (toNoCheckQName qf) ar vis fty rule]
+        else [fdecl]
+
+  checkPreCondRule :: QName -> TARule -> TARule
+  checkPreCondRule qn (ARule rty rargs _) =
+    ARule rty rargs (addPreConditionCheck rty FuncCall qn rty
+                       (map (\ (v,t) -> AVar t v) rargs))
+  checkPreCondRule qn (AExternal _ _) = error $
+    "addPreConditions: cannot add precondition to external operation '" ++
+    snd qn ++ "'!"
 
 ---------------------------------------------------------------------------
 -- Try to verify preconditions: If an operation `f` occurring in some
@@ -256,11 +297,11 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
                 then do
                   printWhenStatus opts $
                     fn ++ ": PRECONDITION OF '" ++ snd qf ++ "': VERIFIED"
-                  return $ AComb ty ct (qf,tys) nargs
+                  return $ AComb ty ct (toNoCheckQName qf, tys) nargs
                 else do
                   printWhenStatus opts $
                     fn ++ ": PRECOND CHECK ADDED TO '" ++ snd qf ++ "'"
-                  return $ addPreConditionCheck ty ct qf tys nargs
+                  return $ AComb ty ct (qf,tys) nargs
             else return $ AComb ty ct (qf,tys) nargs
     ACase ty ct e brs -> do
       ne <- optPreCondInExp pts e
@@ -405,7 +446,8 @@ preCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)] -> State TransState Term
 preCondExpOf ti qf args =
   maybe (returnS tTrue)
         (\fd -> applyFunc fd args `bindS` pred2smt)
-        (find (\fd -> decodeContractQName (funcName fd) == toPreCondQName qf)
+        (find (\fd -> decodeContractQName (funcName fd)
+                        == toPreCondQName (fromNoCheckQName qf))
               (preConds ti))
 
 -- Returns the postcondition expression for a given operation
@@ -417,7 +459,8 @@ postCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)]
 postCondExpOf ti qf args =
   maybe (returnS tTrue)
         (\fd -> applyFunc fd args `bindS` pred2smt)
-        (find (\fd -> decodeContractQName (funcName fd) == toPostCondQName qf)
+        (find (\fd -> decodeContractQName (funcName fd)
+                        == toPostCondQName (fromNoCheckQName qf))
               (postConds ti))
 
 -- Applies a function declaration on a list of arguments,

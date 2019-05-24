@@ -53,13 +53,16 @@ showStats vst =
   showStat "PRECONDITIONS : UNVERIFIED" (uPreCond  vst) ++
   showStat "POSTCONDITIONS: VERIFIED  " (vPostCond vst) ++
   showStat "POSTCONDITIONS: UNVERIFIED" (uPostCond vst) ++
-  (if areContractsAdded vst then "" else "\nALL CONTRACTS VERIFIED!")
+  (if null (uPreCond vst ++ uPostCond vst)
+     then "\nALL CONTRACTS VERIFIED!"
+     else "")
  where
   showStat t fs = if null fs then "" else "\n" ++ t ++ ": " ++ unwords fs
 
 --- Is the program transformed so that some contracts are added?
 areContractsAdded :: VState -> Bool
-areContractsAdded vst = not (null (uPreCond vst) && null (uPostCond vst))
+areContractsAdded vst =
+  not (null (preConds (trInfo vst)) && null (uPostCond vst))
 
 --- Increments the number of preconditions. If the first argument is true,
 --- a precondition has been verified.
