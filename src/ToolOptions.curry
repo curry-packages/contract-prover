@@ -3,7 +3,7 @@
 --- related operations.
 ---
 --- @author Michael Hanus
---- @version May 2019
+--- @version July 2019
 -------------------------------------------------------------------------
 
 module ToolOptions
@@ -52,7 +52,7 @@ processOptions banner argv = do
 
 -- Help text
 usageText :: String
-usageText = usageInfo ("Usage: curry-ctopt [options] <module names>\n") options
+usageText = usageInfo ("Usage: curry-contracts [options] <module names>\n") options
   
 -- Definition of actual command line options.
 options :: [OptDescr (Options -> Options)]

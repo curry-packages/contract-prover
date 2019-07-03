@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version May 2019
+--- @version July 2019
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -63,7 +63,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Verification/Optimization Tool (Version of 24/05/19)"
+   bannerText = "Contract Verification/Optimization Tool (Version of 03/07/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
