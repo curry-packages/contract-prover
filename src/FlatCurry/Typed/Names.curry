@@ -18,6 +18,10 @@ isPrimOp (mn,fn) = mn=="Prelude" && fn `elem` map fst preludePrimOps
 preludePrimOps :: [(String,String)]
 preludePrimOps = unaryPrimOps ++ binaryPrimOps ++
   [("otherwise","true")
+  ,("if_then_else","ite")
+  ,("choose","choose")
+  ,("lchoice","lchoice")
+  ,("rchoice","rchoice")
   ,("apply","apply") -- TODO...
   ]
 

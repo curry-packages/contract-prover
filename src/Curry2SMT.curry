@@ -2,35 +2,52 @@
 --- A tool to translate FlatCurry operations into SMT assertions.
 ---
 --- @author  Michael Hanus
---- @version April 2019
+--- @version August 2019
 ---------------------------------------------------------------------------
 
 module Curry2SMT where
 
 import IOExts
-import List        ( intercalate, isPrefixOf, nub, union )
-import Maybe       ( catMaybes, fromJust, fromMaybe )
+import List        ( isPrefixOf, nub, union )
+import Maybe       ( fromMaybe )
 import ReadNumeric ( readHex )
 
 -- Imports from dependencies:
-import FlatCurry.Annotated.Goodies ( argTypes, resultType )
+import FlatCurry.Annotated.Goodies ( argTypes, resultType, unAnnFuncDecl )
 import FlatCurry.Types             ( showQName )
+import ShowFlatCurry               ( showCurryFuncDecl )
 
 -- Imports from package modules:
 import ESMT
 import FlatCurry.Typed.Read    ( getAllFunctions )
 import FlatCurry.Typed.Goodies
 import FlatCurry.Typed.Names
+import FlatCurry.Typed.NonDet2Det
 import FlatCurry.Typed.Types
 import VerifierState
 
 --- Translates a list of operations specified by their qualified name
 --- (together with all operations on which these operation depend on)
 --- into an SMT string that axiomatizes their semantics.
-funcs2SMT :: IORef VState -> [QName] -> IO Command
+--- Non-deterministic operations are axiomatized by the "planned choice"
+--- translation (see module `FlatCurry.Typed.NonDet2Det`).
+--- In order to call them correctly, a list of qualified operation names
+--- together with their non-determinism status (`True` means non-deterministic)
+--- is also returned.
+funcs2SMT :: IORef VState -> [QName] -> IO (Command, [(QName,Bool)])
 funcs2SMT vstref qns = do
-  funs <- getAllFunctions vstref [] (nub qns)
-  return $ DefineSigsRec (map fun2SMT funs)
+  funs <- getAllFunctions vstref (nub qns)
+  putStrLn $ unlines $
+    "Operations to be axiomatized in SMT:" :
+    map (showCurryFuncDecl showQName showQName . unAnnFuncDecl) funs
+  let ndinfo = nondetOfFuncDecls funs
+      tfuns  = map (addChoiceFuncDecl ndinfo) funs
+  --putStrLn $ "Non-determinism status of these operations:\n" ++ show ndinfo
+  putStrLn $ unlines $
+    "Transformed operations to be axiomatized in SMT:" :
+    map (showCurryFuncDecl snd snd . unAnnFuncDecl) tfuns
+  --return (DefineSigsRec (map fun2SMT funs), [])
+  return (DefineSigsRec (map fun2SMT tfuns), ndinfo)
 
 -- Translate a function declaration into a (possibly polymorphic)
 -- SMT function declaration.
@@ -47,51 +64,45 @@ fun2SMT (AFunc qn _ _ texp rule) =
     tEqu (tComb (transOpName qn) []) (tComb ("External:" ++ s) [])
   rule2SMT (ARule _ vs exp) =
     Forall (map (\ (v,t) -> SV v (polytype2psort t)) vs)
-           (if ndExpr exp then exp2SMT (Just lhs) exp
-                          else tEqu lhs (exp2SMT Nothing exp))
+           (tEqu lhs (exp2SMT exp))
    where
     lhs = tComb (transOpName qn) (map (TSVar . fst) vs)
 
 
 -- Translates a typed FlatCurry expression into an SMT expression.
--- If the first argument is an SMT expression, an equation between
--- this expression and the translated result expression is generated.
--- This is useful to axiomatize non-deterministic operations.
-exp2SMT :: Maybe Term -> TAExpr -> Term
-exp2SMT lhs exp = case exp of
-  AVar _ i          -> makeRHS (TSVar i)
-  ALit _ l          -> makeRHS (lit2smt l)
+exp2SMT :: TAExpr -> Term
+exp2SMT exp = case exp of
+  AVar _ i -> TSVar i
+  ALit _ l -> lit2SMT l
   AComb _ ct (qn,ftype) args ->
     -- TODO: reason about condition `not (null args)`
-    makeRHS (TComb (cons2SMT (ct /= ConsCall || not (null args)) True qn ftype)
-                   (map (exp2SMT Nothing) args))
-  ACase _ _ e brs -> let be = exp2SMT Nothing e
+    TComb (cons2SMT (ct /= ConsCall || not (null args)) True qn ftype)
+          (map exp2SMT args)
+  ACase _ _ e brs -> let be = exp2SMT e
                      in branches2SMT be brs
-  ALet   _ bs e -> Let (map (\ ((v,_),be) -> (v, exp2SMT Nothing be)) bs)
-                       (exp2SMT lhs e)
-  ATyped _ e _ -> exp2SMT lhs e
+  ALet   _ bs e -> Let (map (\ ((v,_),be) -> (v, exp2SMT be)) bs)
+                       (exp2SMT e)
+  ATyped _ e _ -> exp2SMT e
   AFree  _ fvs e -> Forall (map (\ (v,t) -> SV v (polytype2psort t)) fvs)
-                           (exp2SMT lhs e)
-  AOr    _ e1 e2 -> tDisj [exp2SMT lhs e1, exp2SMT lhs e2]
+                           (exp2SMT e)
+  AOr    _ e1 e2 -> tDisj [exp2SMT e1, exp2SMT e2]
  where
-  makeRHS rhs = maybe rhs (\l -> tEqu l rhs) lhs
-
   branches2SMT _  [] = error "branches2SMT: empty branch list"
   branches2SMT be [ABranch p e] = branch2SMT be p e
   branches2SMT be (ABranch p e : brs@(_:_)) =
-    tComb "ite" [patternTest p be, --tEqu be (pat2smt p),
+    tComb "ite" [patternTest p be, --tEqu be (pat2SMT p),
                  branch2SMT be p e,
                  branches2SMT be brs]
   
-  branch2SMT _  (ALPattern _ _) e = exp2SMT lhs e
+  branch2SMT _  (ALPattern _ _) e = exp2SMT e
   branch2SMT be (APattern _ (qf,_) ps) e = case ps of
-    [] -> exp2SMT lhs e
+    [] -> exp2SMT e
     _  -> Let (map (\ (s,v) -> (v, tComb s [be]))
                    (zip (selectors qf) (map fst ps)))
-              (exp2SMT lhs e)
+              (exp2SMT e)
 
 patternTest :: TAPattern -> Term -> Term
-patternTest (ALPattern _ l) be = tEqu be (lit2smt l)
+patternTest (ALPattern _ l) be = tEqu be (lit2SMT l)
 patternTest (APattern ty (qf,_) _) be = constructorTest True qf be ty
 
 --- Translates a constructor name and a term into an SMT formula
@@ -236,9 +247,9 @@ cons2SMT withas withpoly qf rtype =
     else Id (transOpName qf)
   
 --- Translates a pattern into an SMT expression.
-pat2smt :: TAPattern -> Term
-pat2smt (ALPattern _ l)    = lit2smt l
-pat2smt (APattern ty (qf,_) ps)
+pat2SMT :: TAPattern -> Term
+pat2SMT (ALPattern _ l)    = lit2SMT l
+pat2SMT (APattern ty (qf,_) ps)
   | qf == pre "[]" && null ps
   = sortedConst "nil" (polytype2sort ty)
   | otherwise
@@ -246,10 +257,10 @@ pat2smt (APattern ty (qf,_) ps)
 
 --- Translates a literal into an SMT expression.
 --- We represent character as ints.
-lit2smt :: Literal -> Term
-lit2smt (Intc i)   = TConst (TInt i)
-lit2smt (Floatc f) = TConst (TFloat f)
-lit2smt (Charc c)  = TConst (TInt (ord c))
+lit2SMT :: Literal -> Term
+lit2SMT (Intc i)   = TConst (TInt i)
+lit2SMT (Floatc f) = TConst (TFloat f)
+lit2SMT (Charc c)  = TConst (TInt (ord c))
 
 --- Translates a qualified FlatCurry name into an SMT string.
 transOpName :: QName -> String

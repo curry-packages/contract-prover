@@ -2,7 +2,7 @@
 --- Some goodies to deal with type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version April 2019
+--- @version August 2019
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Goodies where
@@ -30,30 +30,20 @@ unionTAProg (AProg name imps1 types1 funcs1 ops1)
 --- body of a function declaration.
 funcsOfFuncDecl :: TAFuncDecl -> [QName]
 funcsOfFuncDecl fd =
-  nub (trRule (\_ _ e -> funcsOfExp e) (\_ _ -> []) (funcRule fd))
- where
-  funcsOfExp = trExpr (\_ _ -> [])
-                      (\_ _ -> [])
-                      (\_ _ (qn,_) fs -> qn : concat fs)
-                      (\_ bs fs -> concatMap snd bs ++ fs)
-                      (\_ _ -> id)
-                      (\_ -> (++))
-                      (\_ _ fs fss -> concat (fs:fss))
-                      (\_ -> id)
-                      (\_ fs _ -> fs)
+  nub (trRule (\_ _ e -> funcsOfExpr e) (\_ _ -> []) (funcRule fd))
 
---- Returns `True` if the expression is non-deterministic,
---- i.e., if `Or` or `Free` occurs in the expression.
-ndExpr :: TAExpr -> Bool
-ndExpr = trExpr (\_ _ -> False)
-                (\_ _ -> False)
-                (\_ _ _ nds -> or nds)
-                (\_ bs nd -> nd || any snd bs)
-                (\_ _ _ -> True)
-                (\_ _ _ -> True)
-                (\_ _ nd bs -> nd || or bs)
-                (\_ -> id)
-                (\_ nd _ -> nd)
+--- Returns the names of all occurrences (with duplicates)
+--- of functions/constructors in an expression.
+funcsOfExpr :: TAExpr -> [QName]
+funcsOfExpr = trExpr (\_ _ -> [])
+                     (\_ _ -> [])
+                     (\_ _ (qn,_) fs -> qn : concat fs)
+                     (\_ bs fs -> concatMap snd bs ++ fs)
+                     (\_ _ -> id)
+                     (\_ -> (++))
+                     (\_ _ fs fss -> concat (fs:fss))
+                     (\_ -> id)
+                     (\_ fs _ -> fs)
 
 --- Pretty prints an expression.
 ppTAExpr :: TAExpr -> String

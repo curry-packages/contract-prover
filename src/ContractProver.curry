@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version July 2019
+--- @version August 2019
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -63,7 +63,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Verification/Optimization Tool (Version of 03/07/19)"
+   bannerText = "Contract Verification/Optimization Tool (Version of 22/08/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
@@ -305,7 +305,7 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
             then do
               printWhenIntermediate opts $ "Checking call to " ++ snd qf
               let ((bs,_)     ,pts1) = normalizeArgs nargs pts
-                  (bindexps   ,pts2) = mapS (exp2SMT True ti) bs pts1
+                  (bindexps   ,pts2) = mapS (binding2SMT True ti) bs pts1
                   (precondcall,pts3) = preCondExpOf ti qf
                                      (zip (map fst bs) (map annExpr args)) pts2
               -- TODO: select from 'bindexps' only demanded argument positions
@@ -329,7 +329,7 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
     ACase ty ct e brs -> do
       ne <- optPreCondInExp pts e
       let freshvar = freshVar pts
-          (be,pts1) = exp2SMT True ti (freshvar,ne) (incFreshVarIndex pts)
+          (be,pts1) = binding2SMT True ti (freshvar,ne) (incFreshVarIndex pts)
           pts2 = pts1 { preCond = tConj [preCond pts, be]
                       , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
       nbrs <- mapIO (optPreCondInBranch pts2 freshvar) brs
@@ -352,7 +352,7 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
 
   optPreCondInBranch pts dvar branch = do
     let (ABranch p e, pts1) = renamePatternVars pts branch
-    let npts = pts1 { preCond = tConj [preCond pts1, tEquVar dvar (pat2smt p)] }
+    let npts = pts1 { preCond = tConj [preCond pts1, tEquVar dvar (pat2SMT p)] }
     ne <- optPreCondInExp npts e
     return (ABranch p ne)
 
@@ -444,13 +444,13 @@ addPostConditionTo pfname fdecl = let fn = funcName fdecl in
 extractPostConditionProofObligation :: VerifyInfo -> [Int] -> Int -> TARule
                                     -> (Term,TransState)
 extractPostConditionProofObligation _ _ _ (AExternal _ s) =
-  (tComb ("External: "++s) [], makeTransState 0 [])
+  (tComb ("External: " ++ s) [], makeTransState 0 [])
 extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =
   let exp    = rnmAllVars renameRuleVar orgexp
       rtype  = resType (length orgargs) ty
       state0 = makeTransState (maximum (resvar : allVars exp) + 1)
                               ((resvar, rtype) : zip args (map snd orgargs))
-  in exp2SMT True ti (resvar,exp) state0
+  in binding2SMT True ti (resvar,exp) state0
  where
   maxArgResult = maximum (resvar : args)
   renameRuleVar r = maybe (r + maxArgResult + 1)
@@ -521,32 +521,35 @@ applyFunc fdecl targs s0 =
 pred2smt :: TAExpr -> State TransState Term
 pred2smt exp = case exp of
   AVar _ i              -> returnS (TSVar i)
-  ALit _ l              -> returnS (lit2smt l)
+  ALit _ l              -> returnS (lit2SMT l)
   AComb _ ct (qf,ftype) args ->
     if qf == pre "not" && length args == 1
       then pred2smt (head args) `bindS` \barg -> returnS (tNot barg)
       else mapS pred2smt args `bindS` \bargs ->
            returnS (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
                                     False qf ftype) bargs)
-  _     -> returnS (tComb (show exp) [])
+  _     -> error $ "Translation of some Boolean expressions into SMT " ++
+                   "not yet supported:\n" ++ show (unAnnExpr exp)
 
 
--- Translates a FlatCurry expression into an SMT formula representing
--- the postcondition assertion by generating an equation
--- between the argument variable (represented by its index in the first
--- component) and the translated expression (second component).
+-- Translates a binding between a variable (represented by its index
+-- in the first component) and a FlatCurry expression (second component).
+-- The FlatCurry expression is translated into an SMT formula so that
+-- the binding is axiomiatized as an equation between the variable
+-- and the translated expression.
 -- The translated expression is normalized when necessary.
 -- For this purpose, a "fresh variable index" is passed as a state.
 -- Moreover, the returned state contains also the types of all fresh variables.
 -- If the first argument is `False`, the expression is not strictly demanded,
 -- i.e., possible contracts of it (if it is a function call) are ignored.
-exp2SMT :: Bool -> VerifyInfo -> (Int,TAExpr) -> State TransState Term
-exp2SMT odemanded vi (oresvar,oexp) = exp2smt odemanded (oresvar, simpExpr oexp)
+binding2SMT :: Bool -> VerifyInfo -> (Int,TAExpr) -> State TransState Term
+binding2SMT odemanded vi (oresvar,oexp) =
+  exp2smt odemanded (oresvar, simpExpr oexp)
  where
   exp2smt demanded (resvar,exp) = case exp of
     AVar _ i -> returnS $ if resvar==i then tTrue
                                        else tEquVar resvar (TSVar i)
-    ALit _ l -> returnS (tEquVar resvar (lit2smt l))
+    ALit _ l -> returnS (tEquVar resvar (lit2SMT l))
     AComb ty ct (qf,_) args ->
       if qf == pre "?" && length args == 2
         then exp2smt demanded (resvar, AOr ty (args!!0) (args!!1))
@@ -601,14 +604,14 @@ exp2SMT odemanded vi (oresvar,oexp) = exp2smt odemanded (oresvar, simpExpr oexp)
       exp2smt demanded (resvar,e) `bindS` \branchbexp ->
       getS `bindS` \ts ->
       putS ts { varTypes = patvars ++ varTypes ts} `bindS_`
-      returnS (tConj [ tEquVar cvar (pat2smt p), branchbexp])
+      returnS (tConj [ tEquVar cvar (pat2SMT p), branchbexp])
      where
       patvars = if isConsPattern p
                   then patArgs p
                   else []
   
     arg2smt e = case e of AVar _ i -> TSVar i
-                          ALit _ l -> lit2smt l
+                          ALit _ l -> lit2SMT l
                           _        -> error $ "Not normalized: " ++ show e
 
 normalizeArgs :: [TAExpr] -> State TransState ([(Int,TAExpr)],[TAExpr])
@@ -657,34 +660,42 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
   unless (null allsyms) $ printWhenIntermediate opts $
     "Translating operations into SMT: " ++
     unwords (map showQName allsyms)
-  smtfuncs <- funcs2SMT vstref allsyms
+  (smtfuncs,ndinfo) <- funcs2SMT vstref allsyms
   let decls = map (maybe (error "Internal error: some datatype not found!") id)
                   (map (tdeclOf vst) usertypes)
-      smt   = concatMap preludeType2SMT (map snd pretypes) ++
-              [ EmptyLine ] ++
-              (if null decls
-                 then []
-                 else [ Comment "User-defined datatypes:" ] ++
-                      map tdecl2SMT decls) ++
-              [ EmptyLine, smtfuncs, EmptyLine
-              , Comment "Free variables:" ] ++
-              map typedVar2SMT vartypes ++
-              [ EmptyLine
-              , Comment "Boolean formula of assertion (known properties):"
-              , sAssert assertion, EmptyLine
-              , Comment "Bindings of implication:"
-              , sAssert impbindings, EmptyLine
-              , Comment "Assert negated implication:"
-              , sAssert (tNot imp), EmptyLine
-              , Comment "check satisfiability:"
-              , CheckSat
-              , Comment "if unsat, we can omit this part of the contract check"
-              ]
-  smtprelude <- readFile (packagePath </> "include" </> "Prelude.smt")
+      freshvar = maximum (map fst vartypes) + 1
+      ([assertionC,impbindingsC,impC],newix) =
+         nondetTransL ndinfo freshvar [assertion,impbindings,imp]
+      smt = concatMap preludeType2SMT (map snd pretypes) ++
+            [ EmptyLine ] ++
+            (if null decls
+               then []
+               else [ Comment "User-defined datatypes:" ] ++
+                    map tdecl2SMT decls) ++
+            [ EmptyLine, smtfuncs, EmptyLine
+            , Comment "Free variables:" ] ++
+            map typedVar2SMT
+                (vartypes ++ map toChoiceVar [freshvar .. newix-1]) ++
+            [ EmptyLine
+            , Comment "Boolean formula of assertion (known properties):"
+            , sAssert assertionC, EmptyLine
+            , Comment "Bindings of implication:"
+            , sAssert impbindingsC, EmptyLine
+            , Comment "Assert negated implication:"
+            , sAssert (tNot impC), EmptyLine
+            , Comment "check satisfiability:"
+            , CheckSat
+            , Comment "if unsat, we can omit this part of the contract check"
+            ]
+  smtstdtypes <- readInclude "Prelude.smt"
+  smtchoice   <- if or (map snd ndinfo)
+                   then readInclude "Prelude_Choice.smt"
+                   else return ""
+  let smtprelude = smtstdtypes ++ smtchoice
   let smtinput = "; " ++ scripttitle ++ "\n\n" ++ smtprelude ++ showSMT smt
   printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ showWithLineNums smtinput
   printWhenIntermediate opts $ "CALLING Z3..."
-  (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:5"] smtinput
+  (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:2"] smtinput
   when (ecode>0) $ do printWhenIntermediate opts $ "EXIT CODE: " ++ show ecode
                       writeFile "error.smt" smtinput
   printWhenIntermediate opts $ "RESULT:\n" ++ out
@@ -693,6 +704,40 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
   return $ if pcvalid
              then Just $ "; proved by: z3 -smt2 <SMTFILE>\n\n" ++ smtinput
              else Nothing
+ where
+  readInclude f = readFile (packagePath </> "include" </> f)
+  toChoiceVar i = (i, TCons (pre "Choice") [])
+
+-- Translate a term w.r.t. non-determinism information by
+-- adding fresh `Choice` variable arguments to non-deterministic operations.
+-- The fresh variable index is passed as a state.
+nondetTrans :: [(QName,Bool)] -> Int -> Term -> (Term,Int)
+nondetTrans ndinfo ix trm = case trm of
+  TConst _ -> (trm,ix)
+  TSVar  _ -> (trm,ix)
+  TComb f args -> let (targs,i1) = nondetTransL ndinfo ix args
+                  in if maybe False
+                              (\qn -> maybe False id (lookup qn ndinfo))
+                              (untransOpName (qidName f))
+                       then (TComb (addChoiceType f) (TSVar i1 : targs), i1+1)
+                       else (TComb f targs, i1)
+  Forall vs arg -> let (targ,ix1) = nondetTrans ndinfo ix arg
+                   in (Forall vs targ, ix1)
+  Exists vs arg -> let (targ,ix1) = nondetTrans ndinfo ix arg
+                   in (Exists vs targ, ix1)
+  ESMT.Let bs e -> let (tbt,ix1) = nondetTransL ndinfo ix (map snd bs)
+                       (te,ix2)  = nondetTrans ndinfo ix1 e
+                   in (ESMT.Let (zip (map fst bs) tbt) te, ix2)
+ where
+  addChoiceType (Id n)    = Id n
+  addChoiceType (As n tp) = As n (SComb "Func" [SComb "Choice" [], tp])
+
+nondetTransL :: [(QName,Bool)] -> Int -> [Term] -> ([Term],Int)
+nondetTransL _ i [] = ([],i)
+nondetTransL ndinfo i (t:ts) =
+  let (t1,i1) = nondetTrans ndinfo i t
+      (ts1,i2) = nondetTransL ndinfo i1 ts
+  in (t1:ts1, i2)
 
 -- Operations axiomatized by specific smt scripts (no longer necessary
 -- since these scripts are now automatically generated by Curry2SMT.funcs2SMT).
