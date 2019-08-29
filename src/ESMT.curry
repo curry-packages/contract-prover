@@ -383,6 +383,26 @@ reduceAsInTerm (TComb f ts) = TComb (simpAs f) (map reduceAsInTerm ts)
                            _ -> qid
 
 --------------------------------------------------------------------------
+-- Get all sort identifiers occurring in a sort.
+sortIdsOfSort :: Sort -> [Ident]
+sortIdsOfSort (SComb s ss) = s : concatMap sortIdsOfSort ss
+
+-- Get all sorts occurring in a term.
+sortsOfTerm :: Term -> [Sort]
+sortsOfTerm (TConst l) = []
+sortsOfTerm (TSVar  _) = []
+sortsOfTerm (Let bs t) = concatMap (sortsOfTerm . snd) bs ++ sortsOfTerm t
+sortsOfTerm (Forall vs t) = map sortOfSortedVar vs ++ sortsOfTerm t
+sortsOfTerm (Exists vs t) = map sortOfSortedVar vs ++ sortsOfTerm t
+sortsOfTerm (TComb f ts) = sortsOfQIdent f ++ concatMap sortsOfTerm ts
+ where
+  sortsOfQIdent (Id _)   = []
+  sortsOfQIdent (As _ s) = [s]
+
+sortOfSortedVar :: SortedVar -> Sort
+sortOfSortedVar (SV _ s) = s
+
+--------------------------------------------------------------------------
 -- Remove parametric polymorphism (supported by `DefineSigsRec`)
 -- in an SMT script.
 -- First, for all QIdents occurring in assertions, their type-instantiated

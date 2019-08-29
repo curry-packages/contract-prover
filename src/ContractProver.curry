@@ -17,7 +17,7 @@ import Directory    ( doesFileExist )
 import Integer      ( ilog )
 import IOExts
 import List         ( deleteBy, elemIndex, find, init, intersect, isSuffixOf
-                    , maximum, minimum, partition, splitOn, union )
+                    , maximum, minimum, nub, partition, splitOn, union )
 import Maybe        ( catMaybes, isJust )
 import ReadShowTerm ( showTerm )
 import State
@@ -648,24 +648,29 @@ checkImplicationWithSMT :: Options -> IORef VState -> String -> [(Int,TypeExpr)]
                         -> Term -> Term -> Term -> IO (Maybe String)
 checkImplicationWithSMT opts vstref scripttitle vartypes
                         assertion impbindings imp = do
-  let (pretypes,usertypes) =
-         partition ((== "Prelude") . fst)
-                   (foldr union [] (map (tconsOfTypeExpr . snd) vartypes))
   vst <- readIORef vstref
   let allsyms = catMaybes
                   (map (\n -> maybe Nothing Just (untransOpName n))
                        (map qidName
                          (allQIdsOfTerm (tConj [assertion, impbindings, imp]))))
   unless (null allsyms) $ printWhenIntermediate opts $
-    "Translating operations into SMT: " ++
-    unwords (map showQName allsyms)
-  (smtfuncs,ndinfo) <- funcs2SMT opts vstref allsyms
+    "Translating operations into SMT: " ++ unwords (map showQName allsyms)
+  (smtfuncs,fdecls,ndinfo) <- funcs2SMT opts vstref allsyms
+  let -- all sorts occurring in SMT terms:
+      allsorts = concatMap sortIdsOfSort
+                           (concatMap sortsOfTerm [assertion,impbindings,imp])
+      -- all types occurring in function declarations and free variables:
+      alltypes = concatMap typesOfFunc fdecls ++ map snd vartypes
+      alltcons = foldr union [] (map tconsOfTypeExpr alltypes)
+  let (pretypes,usertypes) = partition ((== "Prelude") . fst) alltcons
+      presorts = nub (filter (`notElem` (map tcons2SMT pretypes)) allsorts) ++
+                 map tcons2SMT pretypes
   let decls = map (maybe (error "Internal error: some datatype not found!") id)
                   (map (tdeclOf vst) usertypes)
       freshvar = maximum (map fst vartypes) + 1
       ([assertionC,impbindingsC,impC],newix) =
          nondetTransL ndinfo freshvar [assertion,impbindings,imp]
-      smt = concatMap preludeType2SMT (map snd pretypes) ++
+      smt = concatMap preludeSort2SMT presorts ++
             [ EmptyLine ] ++
             (if null decls
                then []

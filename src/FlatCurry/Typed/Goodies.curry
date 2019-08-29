@@ -131,6 +131,24 @@ matchTypes (t1:ts1) (t2:ts2) = do
   return (plusFM s t)
 
 ----------------------------------------------------------------------------
+--- Get all types occurring in function declaration.
+typesOfFunc :: TAFuncDecl -> [TypeExpr]
+typesOfFunc fdecl = funcType fdecl : typesOfExp (ruleBody (funcRule fdecl))
+
+--- Get all types occurring in an expression.
+typesOfExp :: TAExpr -> [TypeExpr]
+typesOfExp exp = case exp of
+  AComb t _ (_,qt) args -> t : qt : concatMap typesOfExp args
+  ACase  _ _ e bs -> typesOfExp e ++
+                     concatMap (\ (ABranch _ be) -> typesOfExp be) bs
+  AOr    _ e1 e2  -> typesOfExp e1 ++ typesOfExp e2
+  ALet   _ bs e   -> concatMap (typesOfExp . snd) bs ++ typesOfExp e
+  AFree  _ fvs e  -> map snd fvs ++ typesOfExp e
+  ATyped _ e _    -> typesOfExp e
+  AVar   t _      -> [t]
+  ALit   t _      -> [t]
+
+----------------------------------------------------------------------------
 --- Transform name into Prelude-qualified name.
 pre :: String -> QName
 pre f = ("Prelude",f)

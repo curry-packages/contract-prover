@@ -35,7 +35,8 @@ import VerifierState
 --- In order to call them correctly, a list of qualified operation names
 --- together with their non-determinism status (`True` means non-deterministic)
 --- is also returned.
-funcs2SMT :: Options -> IORef VState -> [QName] -> IO (Command, [(QName,Bool)])
+funcs2SMT :: Options -> IORef VState -> [QName]
+          -> IO (Command, [TAFuncDecl], [(QName,Bool)])
 funcs2SMT opts vstref qns = do
   funs <- getAllFunctions vstref (nub qns)
   unless (null funs) $ printWhenAll opts $ unlines $
@@ -49,7 +50,7 @@ funcs2SMT opts vstref qns = do
   unless (null tfuns) $ printWhenAll opts $ unlines $
     "Transformed operations to be axiomatized in SMT:" :
     map (showCurryFuncDecl snd snd . unAnnFuncDecl) tfuns
-  return (DefineSigsRec (map fun2SMT tfuns), ndinfo)
+  return (DefineSigsRec (map fun2SMT tfuns), tfuns, ndinfo)
  where
   showND ((_,n),nd) = n ++ ": " ++ if nd then "NONDET" else "DET"
 
@@ -221,21 +222,70 @@ genSelName qc@(mn,fn) i
  | otherwise
  = "sel" ++ show i ++ '-' : transOpName qc
 
---- Translates a prelude type into an SMT datatype declaration,
+--- Translates a prelude sort (with SMT name) into an SMT datatype declaration,
 --- if necessary.
-preludeType2SMT :: String -> [Command]
-preludeType2SMT tn
- | take 3 tn == "(,,"
- = let arity = length tn -1
-   in [DeclareDatatypes
-        [(smtname, arity,
-          DT (map (\v -> 'T':show v) [1 .. arity])
-             [DCons (transOpName (pre tn)) (map texp2sel [1 .. arity])])]]
+preludeSort2SMT :: String -> [Command]
+preludeSort2SMT sn
+ | take 5 sn == "Tuple"
+ = let arity = read (drop 5 sn)
+       texp2sel i = ("Tuple" ++ show arity ++ "_" ++ show i,
+                     SComb ('T' : show i) [])
+   in [ Comment $ show arity ++ "-tuple type:"
+      , DeclareDatatypes
+          [(sn, arity,
+            DT (map (\v -> 'T':show v) [1 .. arity])
+               [DCons sn (map texp2sel [1 .. arity])])]]
+ | sn == "Pair"
+ = pairType
+ | sn == "Maybe"
+ = maybeType
+ | sn == "Either"
+ = eitherType
+ | sn == "Ordering"
+ = orderingType
+ | sn == "Unit"
+ = unitType
  | otherwise
  = []
- where
-  smtname = tcons2SMT (pre tn)
-  texp2sel i = (genSelName (pre tn) i, SComb ('T' : show i) [])
+
+pairType :: [Command]
+pairType =
+  [ Comment "Pair type:"
+  , DeclareDatatypes 
+      [("Pair",2,
+        DT ["T1", "T2"]
+           [ DCons "mk-pair" [("first",  SComb "T1" []),
+                              ("second", SComb "T2" [])]])]]
+
+maybeType :: [Command]
+maybeType =
+  [ Comment "Maybe type:"
+  , DeclareDatatypes 
+      [("Maybe",1,
+        DT ["T"]
+           [ DCons "Nothing" [],
+             DCons "Just" [("just", SComb "T" [])]])]]
+
+eitherType :: [Command]
+eitherType =
+  [ Comment "Either type:"
+  , DeclareDatatypes 
+      [("Either",2,
+        DT ["T1", "T2"]
+           [ DCons "Left"  [("left",  SComb "T1" [])],
+             DCons "Right" [("right", SComb "T2" [])]])]]
+
+orderingType :: [Command]
+orderingType =
+  [ Comment "Ordering type:"
+  , DeclareDatatypes 
+      [("Ordering",0,
+        DT [] [ DCons "LT" [], DCons "EQ" [],DCons "GT" [] ])]]
+
+unitType :: [Command]
+unitType =
+  [ Comment "Unit type:"
+  , DeclareDatatypes [("Unit",0, DT [] [ DCons "unit" []])]]
 
 ---------------------------------------------------------------------------
 

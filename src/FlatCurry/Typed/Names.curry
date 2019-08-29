@@ -73,6 +73,9 @@ transPrimTCons =
   ,("[]","List")
   ,("()","Unit")
   ,("(,)","Pair")
+  ,("Maybe","Maybe")
+  ,("Either","Either")
+  ,("Ordering","Ordering")
   ]
 
 --- Some primitive constructors from the prelude and their SMT names.
