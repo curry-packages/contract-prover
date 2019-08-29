@@ -63,7 +63,7 @@ mf p = do
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Verification/Optimization Tool (Version of 22/08/19)"
+   bannerText = "Contract Checking/Verification Tool (Version of 29/08/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
@@ -83,15 +83,14 @@ main = do
                     "Postcondition for '" ++ optname ++ "':\n" ++
                     encodeContractName (optname ++ "'post")
     else do
+      when (optVerb opts > 0) $ putStrLn banner
       z3exists <- fileInPath "z3"
-      if z3exists
-        then do
-          when (optVerb opts > 0) $ putStrLn banner
-          mapIO_ (proveContracts opts) progs
-        else do
-          putStrLn "CONTRACT VERIFICATION SKIPPED:"
-          putStrLn "The SMT solver Z3 is required for the prover to work"
-          putStrLn "but the program 'z3' is not found on the PATH!"
+      unless (z3exists || not (optVerify opts)) $ putStrLn $ unlines $
+        [ "WARNING: CONTRACT VERIFICATION SKIPPED:"
+        , "The SMT solver Z3 is required for the verifier"
+        , "but the program 'z3' is not found in the PATH!"]
+      let opts' = if z3exists then opts else opts { optVerify = False }
+      mapM_ (proveContracts opts') progs
 
 ---------------------------------------------------------------------------
 
@@ -244,7 +243,7 @@ addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
 --     f'NOCHECK xs = rhs
 addPreConditions :: Options -> TAProg -> IORef VState -> IO TAProg
 addPreConditions _ prog vstref = do
-  newfuns  <- mapIO addPreCondition (progFuncs prog)
+  newfuns  <- mapM addPreCondition (progFuncs prog)
   return (updProgFuncs (const (concat newfuns)) prog)
  where
   addPreCondition fdecl@(AFunc qf ar vis fty rule) = do
@@ -271,7 +270,7 @@ addPreConditions _ prog vstref = do
 -- If the proof is not successful, a precondition check is added to this call.
 verifyPreConditions :: Options -> TAProg -> IORef VState -> IO TAProg
 verifyPreConditions opts prog vstref = do
-  newfuns  <- mapIO (provePreCondition opts vstref) (progFuncs prog)
+  newfuns  <- mapM (provePreCondition opts vstref) (progFuncs prog)
   return (updProgFuncs (const newfuns) prog)
 
 provePreCondition :: Options -> IORef VState -> TAFuncDecl -> IO TAFuncDecl
@@ -300,7 +299,7 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
       if qf == ("Prelude","?") && length args == 2
         then optPreCondInExp pts (AOr ty (args!!0) (args!!1))
         else do
-          nargs <- mapIO (optPreCondInExp pts) args
+          nargs <- mapM (optPreCondInExp pts) args
           if toPreCondQName qf `elem` map funcName (preConds ti)
             then do
               printWhenIntermediate opts $ "Checking call to " ++ snd qf
@@ -332,14 +331,14 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
           (be,pts1) = binding2SMT True ti (freshvar,ne) (incFreshVarIndex pts)
           pts2 = pts1 { preCond = tConj [preCond pts, be]
                       , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
-      nbrs <- mapIO (optPreCondInBranch pts2 freshvar) brs
+      nbrs <- mapM (optPreCondInBranch pts2 freshvar) brs
       return $ ACase ty ct ne nbrs
     AOr ty e1 e2 -> do
       ne1 <- optPreCondInExp pts e1
       ne2 <- optPreCondInExp pts e2
       return $ AOr ty ne1 ne2
     ALet ty bs e -> do
-      nes <- mapIO (optPreCondInExp pts) (map snd bs)
+      nes <- mapM (optPreCondInExp pts) (map snd bs)
       ne  <- optPreCondInExp pts e
       return $ ALet ty (zip (map fst bs) nes) ne
     AFree ty fvs e -> do
@@ -660,7 +659,7 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
   unless (null allsyms) $ printWhenIntermediate opts $
     "Translating operations into SMT: " ++
     unwords (map showQName allsyms)
-  (smtfuncs,ndinfo) <- funcs2SMT vstref allsyms
+  (smtfuncs,ndinfo) <- funcs2SMT opts vstref allsyms
   let decls = map (maybe (error "Internal error: some datatype not found!") id)
                   (map (tdeclOf vst) usertypes)
       freshvar = maximum (map fst vartypes) + 1
@@ -767,7 +766,7 @@ fileInPath :: String -> IO Bool
 fileInPath file = do
   path <- getEnviron "PATH"
   dirs <- return $ splitOn ":" path
-  (liftIO (any id)) $ mapIO (doesFileExist . (</> file)) dirs
+  (liftIO (any id)) $ mapM (doesFileExist . (</> file)) dirs
 
 -- Shows a qualified name by replacing all dots by underscores.
 showQNameNoDots :: QName -> String

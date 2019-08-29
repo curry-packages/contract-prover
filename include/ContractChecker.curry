@@ -33,9 +33,8 @@ checkPreCond x pc fn args =
 ---
 checkPostCond :: a -> (a -> Bool) -> String -> b -> a
 checkPostCond rhs fpost fname args =
-  if fpost y
-    then y
+  if fpost rhs
+    then rhs
     else error $ "Postcondition of operation '" ++ fname ++
                  "' failed for arguments/result:\n" ++
-                 showTerm args ++ " -> " ++ showTerm y
- where y = rhs
+                 showTerm args ++ " -> " ++ showTerm rhs

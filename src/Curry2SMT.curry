@@ -24,6 +24,7 @@ import FlatCurry.Typed.Goodies
 import FlatCurry.Typed.Names
 import FlatCurry.Typed.NonDet2Det
 import FlatCurry.Typed.Types
+import ToolOptions
 import VerifierState
 
 --- Translates a list of operations specified by their qualified name
@@ -34,20 +35,23 @@ import VerifierState
 --- In order to call them correctly, a list of qualified operation names
 --- together with their non-determinism status (`True` means non-deterministic)
 --- is also returned.
-funcs2SMT :: IORef VState -> [QName] -> IO (Command, [(QName,Bool)])
-funcs2SMT vstref qns = do
+funcs2SMT :: Options -> IORef VState -> [QName] -> IO (Command, [(QName,Bool)])
+funcs2SMT opts vstref qns = do
   funs <- getAllFunctions vstref (nub qns)
-  putStrLn $ unlines $
+  unless (null funs) $ printWhenAll opts $ unlines $
     "Operations to be axiomatized in SMT:" :
-    map (showCurryFuncDecl showQName showQName . unAnnFuncDecl) funs
+    map (showCurryFuncDecl snd snd . unAnnFuncDecl) funs
   let ndinfo = nondetOfFuncDecls funs
       tfuns  = map (addChoiceFuncDecl ndinfo) funs
-  --putStrLn $ "Non-determinism status of these operations:\n" ++ show ndinfo
-  putStrLn $ unlines $
+  unless (null ndinfo) $ printWhenAll opts $
+    "Non-determinism status of these operations:\n" ++
+    unlines ((map showND) ndinfo)
+  unless (null tfuns) $ printWhenAll opts $ unlines $
     "Transformed operations to be axiomatized in SMT:" :
     map (showCurryFuncDecl snd snd . unAnnFuncDecl) tfuns
-  --return (DefineSigsRec (map fun2SMT funs), [])
   return (DefineSigsRec (map fun2SMT tfuns), ndinfo)
+ where
+  showND ((_,n),nd) = n ++ ": " ++ if nd then "NONDET" else "DET"
 
 -- Translate a function declaration into a (possibly polymorphic)
 -- SMT function declaration.
@@ -128,7 +132,8 @@ selectors qf | qf == ("Prelude",":")     = ["head","tail"]
              | qf == ("Prelude","Left")  = ["left"]
              | qf == ("Prelude","Right") = ["right"]
              | qf == ("Prelude","Just")  = ["just"]
-             | otherwise = map (genSelName qf) [1..]
+             | qf == ("Prelude","(,)")   = ["first","second"]
+             | otherwise                 = map (genSelName qf) [1..]
 
 --- Translates a FlatCurry type expression into a corresponding SMT sort.
 --- Polymorphic type variables are translated into the sort `TVar`.
@@ -223,12 +228,13 @@ preludeType2SMT tn
  | take 3 tn == "(,,"
  = let arity = length tn -1
    in [DeclareDatatypes
-        [(tcons2SMT (pre tn), arity,
+        [(smtname, arity,
           DT (map (\v -> 'T':show v) [1 .. arity])
              [DCons (transOpName (pre tn)) (map texp2sel [1 .. arity])])]]
  | otherwise
  = []
  where
+  smtname = tcons2SMT (pre tn)
   texp2sel i = (genSelName (pre tn) i, SComb ('T' : show i) [])
 
 ---------------------------------------------------------------------------

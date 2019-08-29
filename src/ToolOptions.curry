@@ -12,6 +12,7 @@ module ToolOptions
   )
  where
 
+import Char              ( toUpper )
 import GetOpt
 import ReadNumeric       ( readNat )
 import System            ( exitWith )
@@ -65,20 +66,20 @@ options =
             (OptArg (maybe (checkVerb 2) (safeReadNat checkVerb)) "<n>")
             "verbosity level:\n0: quiet (same as `-q')\n1: show status messages (default)\n2: show intermediate results (same as `-v')\n3: show all intermediate results and more details"
   , Option "a" ["add"] (NoArg (\opts -> opts { optVerify = False }))
-           "do not verify contracts, just add contract checking"
-  , Option "n" ["nostore"]
-            (NoArg (\opts -> opts { optFCY = False, optTFCY = False }))
-           "do not write transformed FlatCurry program"
-  , Option "t" ["tfcy"]
-            (NoArg (\opts -> opts { optFCY = False, optTFCY = True }))
-           "write transformed *typed* FlatCurry program"
+           "do not verify contracts, just add contract checks"
   , Option "s" ["strict"] (NoArg (\opts -> opts { optStrict = True }))
            "check contracts w.r.t. strict evaluation strategy"
+  , Option "t" ["target"]
+            (ReqArg checkTarget "<T>")
+           ("target of the transformed program:\n" ++
+            "NONE: do not store transformed FlatCurry program\n" ++
+            "FCY : write FlatCurry program (default)\n" ++
+            "TFCY: write typed FlatCurry program")
   , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))
            "do not write scripts of successful proofs"
   , Option "" ["name"]
             (ReqArg (\s opts -> opts { optName = s }) "<f>")
-            "show only the names of pre- and postconditions"
+            "only show the names of pre- and postconditions\nfor function <f>"
   ]
  where
   safeReadNat opttrans s opts =
@@ -88,8 +89,14 @@ options =
             (readNat s)
 
   checkVerb n opts = if n>=0 && n<4
-                     then opts { optVerb = n }
-                     else error "Illegal verbosity level (try `-h' for help)"
+                       then opts { optVerb = n }
+                       else error "Illegal verbosity level (try `-h' for help)"
+
+  checkTarget t opts = case map toUpper t of
+    "NONE" -> opts { optFCY = False, optTFCY = False }
+    "FCY"  -> opts { optFCY = True,  optTFCY = False }
+    "TFCY" -> opts { optFCY = False, optTFCY = True  }
+    _      -> error $ "Illegal target `" ++ t ++ "' (try `-h' for help)"
 
 -------------------------------------------------------------------------
 
@@ -106,6 +113,6 @@ printWhenAll opts s =
  when (optVerb opts > 2) (printCP s)
 
 printCP :: String -> IO ()
-printCP s = putStrLn $ "CONTRACT PROVER: " ++ s
+printCP s = putStrLn $ "INFO: " ++ s
 
 ---------------------------------------------------------------------------

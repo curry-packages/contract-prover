@@ -15,5 +15,5 @@ sum n = if n==0 then 0 else n + sum (n-1)
 main1 :: Int
 main1 = sum 100
 
--- The contract prover can verify all contracts,
--- hence it actually verified the (partial) correctness of sum.
+-- The contract prover can verify all contracts.
+-- Hence, it actually verified the (partial) correctness of sum.

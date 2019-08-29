@@ -20,15 +20,15 @@ This analyzes the FlatCurry code of the module, attempts to prove
 the contracts in this module (unless option `--add` is set),
 and adds dynamic contract checking if a proof is not successful.
 Finally, the FlatCurry program is replaced by the transformed version
-(unless option `--nostore` is set).
+(unless option `--target=NONE` is set).
 Hence, this tool might be integrated into the compilation chain
 of a Curry system.
 In addition to the transformation of the FlatCurry program,
 successful proofs will be stored in files so that they can
 be re-used by other tools. For instance, if the postcondition
 of an operation `f` defined in module `M` is verified,
-a file `PROOF_M_f_SatisfiesPostCondition.smt` is generated
-which contains the SMT script of this proof.
+a file `PROOF_M_f_SatisfiesPostCondition.smt` is generated.
+This file contains the SMT script of this proof.
 
 The directory `examples` contains various examples where the
 contract prover can eliminate all contracts at compile time.

@@ -188,8 +188,7 @@ pairType =
   DeclareDatatypes 
     [("Pair",2,
       DT ["X", "Y"]
-         [ DCons "nil" [],
-           DCons "mk-pair" [("first",  SComb "X" []),
+         [ DCons "mk-pair" [("first",  SComb "X" []),
                             ("second", SComb "Y" [])]])]
 -}
 
