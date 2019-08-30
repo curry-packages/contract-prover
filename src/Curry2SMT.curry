@@ -287,6 +287,15 @@ unitType =
   [ Comment "Unit type:"
   , DeclareDatatypes [("Unit",0, DT [] [ DCons "unit" []])]]
 
+-- SMT type to represent dictionary variables
+dictType :: [Command]
+dictType =
+  [ Comment "Dict type (to represent dictionary variables):"
+  , DeclareDatatypes 
+      [("Dict",1,
+        DT ["T"]
+           [ DCons "Dict" [("dict", SComb "T" [])]])]]
+
 ---------------------------------------------------------------------------
 
 --- Translates a qualifed name with given result type into an SMT identifier.

@@ -648,7 +648,6 @@ checkImplicationWithSMT :: Options -> IORef VState -> String -> [(Int,TypeExpr)]
                         -> Term -> Term -> Term -> IO (Maybe String)
 checkImplicationWithSMT opts vstref scripttitle vartypes
                         assertion impbindings imp = do
-  vst <- readIORef vstref
   let allsyms = catMaybes
                   (map (\n -> maybe Nothing Just (untransOpName n))
                        (map qidName
@@ -656,26 +655,11 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
   unless (null allsyms) $ printWhenIntermediate opts $
     "Translating operations into SMT: " ++ unwords (map showQName allsyms)
   (smtfuncs,fdecls,ndinfo) <- funcs2SMT opts vstref allsyms
-  let -- all sorts occurring in SMT terms:
-      allsorts = concatMap sortIdsOfSort
-                           (concatMap sortsOfTerm [assertion,impbindings,imp])
-      -- all types occurring in function declarations and free variables:
-      alltypes = concatMap typesOfFunc fdecls ++ map snd vartypes
-      alltcons = foldr union [] (map tconsOfTypeExpr alltypes)
-  let (pretypes,usertypes) = partition ((== "Prelude") . fst) alltcons
-      presorts = nub (filter (`notElem` (map tcons2SMT pretypes)) allsorts) ++
-                 map tcons2SMT pretypes
-  let decls = map (maybe (error "Internal error: some datatype not found!") id)
-                  (map (tdeclOf vst) usertypes)
-      freshvar = maximum (map fst vartypes) + 1
+  smttypes <- genSMTTypes vstref vartypes fdecls [assertion,impbindings,imp]
+  let freshvar = maximum (map fst vartypes) + 1
       ([assertionC,impbindingsC,impC],newix) =
          nondetTransL ndinfo freshvar [assertion,impbindings,imp]
-      smt = concatMap preludeSort2SMT presorts ++
-            [ EmptyLine ] ++
-            (if null decls
-               then []
-               else [ Comment "User-defined datatypes:" ] ++
-                    map tdecl2SMT decls) ++
+      smt = smttypes ++
             [ EmptyLine, smtfuncs, EmptyLine
             , Comment "Free variables:" ] ++
             map typedVar2SMT
@@ -696,7 +680,38 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
                    then readInclude "Prelude_Choice.smt"
                    else return ""
   let smtprelude = smtstdtypes ++ smtchoice
-  let smtinput = "; " ++ scripttitle ++ "\n\n" ++ smtprelude ++ showSMT smt
+  callSMT opts $ "; " ++ scripttitle ++ "\n\n" ++ smtprelude ++ showSMT smt
+ where
+  readInclude f = readFile (packagePath </> "include" </> f)
+  toChoiceVar i = (i, TCons (pre "Choice") [])
+
+-- Computes SMT type declarations for all types occurring in the
+-- variable types, function declarations, or as sorts in SMT terms.
+genSMTTypes :: IORef VState -> [(Int,TypeExpr)] -> [TAFuncDecl] -> [Term]
+            -> IO [Command]
+genSMTTypes vstref vartypes fdecls smtterms = do
+  let -- all types occurring in function declarations and variable types:
+      alltypes = concatMap typesOfFunc fdecls ++ map snd vartypes
+      alltcons = foldr union [] (map tconsOfTypeExpr alltypes)
+      -- all sorts occurring in SMT terms:
+      allsorts = concatMap sortIdsOfSort (concatMap sortsOfTerm smtterms)
+      (pretypes,usertypes) = partition ((== "Prelude") . fst) alltcons
+      presorts = nub (filter (`notElem` (map tcons2SMT pretypes)) allsorts) ++
+                 map tcons2SMT pretypes
+  vst <- readIORef vstref
+  let udecls = map (maybe (error "Internal error: some datatype not found!") id)
+                   (map (tdeclOf vst) usertypes)
+  return $ concatMap preludeSort2SMT presorts ++
+           [ EmptyLine ] ++
+           (if null udecls
+              then []
+              else [ Comment "User-defined datatypes:" ] ++
+                   map tdecl2SMT udecls)
+
+-- Calls the SMT solver (with a timeout of 2secs) on a given SMTLIB script.
+-- Returns `Just` the SMT script if the result is `unsat`, otherwise `Nothing`.
+callSMT :: Options -> String -> IO (Maybe String)
+callSMT opts smtinput = do
   printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ showWithLineNums smtinput
   printWhenIntermediate opts $ "CALLING Z3..."
   (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:2"] smtinput
@@ -704,13 +719,10 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
                       writeFile "error.smt" smtinput
   printWhenIntermediate opts $ "RESULT:\n" ++ out
   unless (null err) $ printWhenIntermediate opts $ "ERROR:\n" ++ err
-  let pcvalid = let ls = lines out in not (null ls) && head ls == "unsat"
-  return $ if pcvalid
+  let unsat = let ls = lines out in not (null ls) && head ls == "unsat"
+  return $ if unsat
              then Just $ "; proved by: z3 -smt2 <SMTFILE>\n\n" ++ smtinput
              else Nothing
- where
-  readInclude f = readFile (packagePath </> "include" </> f)
-  toChoiceVar i = (i, TCons (pre "Choice") [])
 
 -- Translate a term w.r.t. non-determinism information by
 -- adding fresh `Choice` variable arguments to non-deterministic operations.
