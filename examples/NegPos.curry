@@ -1,6 +1,8 @@
-
 -- A simple example from the introduction of
--- [Ngueyen/Tobin-Hochstaedt/Van Horn, ICFP'14]
+--
+-- Nguyen, P.C., Tobin-Hochstadt, S., Van Horn, D.:
+-- Soft Contract Verification
+-- Proc. ICFP 2014, pp. 139-152, DOI: 10.1145/2628136.2628156
 
 -- Contract: pos -> neg
 f'pre :: Int -> Bool
