@@ -49,21 +49,12 @@ import PackageConfig  ( packagePath )
 import ToolOptions
 import VerifierState
 
--- Just for testing:
-m :: IO ()
-m = mf "Fac"
-
-mf :: String -> IO ()
-mf p = do
-  system $ "rm -f .curry/" ++ p ++ ".fcy"
-  proveContracts defaultOptions { optVerb = 2 } p
-
 ------------------------------------------------------------------------
 
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Checking/Verification Tool (Version of 29/08/19)"
+   bannerText = "Contract Checking/Verification Tool (Version of 05/09/19)"
    bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
@@ -558,6 +549,8 @@ binding2SMT odemanded vi (oresvar,oexp) =
                   bs `bindS` \bindexps ->
              comb2smt qf ty ct nargs bs bindexps
     ALet _ bs e ->
+      getS `bindS` \ts ->
+      putS (addVarTypes (map fst bs) ts) `bindS_`
       mapS (exp2smt False)
            (map (\ ((i,_),ae) -> (i,ae)) bs) `bindS` \bindexps ->
       exp2smt demanded (resvar,e) `bindS` \bexp ->
