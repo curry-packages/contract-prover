@@ -12,8 +12,10 @@ fac'post n f = f > 0
 fac :: Int -> Int
 fac n = if n==0 then 1 else n * fac (n-1)
 
+main1 :: Int
 main1 = fac 100
 
+main2 :: Int
 main2 = fac (fac 4)
 
 -- Here we cannot eliminate the precondition check:

@@ -6,7 +6,7 @@
 -- Proc. of the 24th International Workshop on Functional and
 -- (Constraint) Logic Programming (WFLP 2016),
 -- EPTCS Vol. 234, pp. 180-195, DOI: 10.4204/EPTCS.234.13
--- 
+--
 -- where a proof for the postcondition of `perm` is manually constructed
 -- by translating Curry into Agda. Depending on the representation
 -- of non-deterministic operations in Agda, the proof of the postcondition

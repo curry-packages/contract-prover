@@ -11,7 +11,7 @@ minimum'pre :: [Int] -> Bool
 minimum'pre xs = not (inull xs)
 
 minimum :: [Int] -> Int
-minimum [x] = x
+minimum [x]          = x
 minimum (x:xs@(_:_)) = min x (minimum xs)
 
 -- Example call:

@@ -1,9 +1,11 @@
 
 -- last with recursive precondition:
 
+last'pre :: [a] -> Bool
 last'pre xs = not (null xs)
 
-last [x] = x
+last :: [a] -> a
+last [x]      = x
 last (_:x:xs) = last (x:xs)
 
 -- Example call:
