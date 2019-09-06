@@ -19,7 +19,7 @@
 --- by showing their correct behavior for all possible plans.
 ---
 --- @author  Michael Hanus
---- @version August 2019
+--- @version September 2019
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.NonDet2Det
@@ -87,16 +87,64 @@ hasNonDetInfo ndinfo qn = maybe False id (lookup qn ndinfo)
 ----------------------------------------------------------------------------
 --- Add a "choice plan" argument to a function declaration for all
 --- non-deterministic functions (according to first argument).
-addChoiceFuncDecl :: [(QName,Bool)] -> TAFuncDecl -> TAFuncDecl
-addChoiceFuncDecl _ fdecl@(AFunc _ _ _ _ (AExternal _ _)) = fdecl
-addChoiceFuncDecl ndinfo fdecl@(AFunc qn ar vis texp (ARule tr args rhs)) =
+--- The first argument maps qualified function names into a Boolean flag
+--- which is true if the function is (or might be) non-deterministic.
+--- The second argument is a tuple `(cpType,chooseF,lchoiceF,rchoiceF)`
+--- describing the types and operations implementing the choice plan:
+---
+---     cpType -- the type of the choice plan
+---     chooseF  :: cpType -> Bool   -- the name of the choose operation
+---     lchoiceF :: cpType -> cpType -- the name of the lchoice operation
+---     rchoiceF :: cpType -> cpType -- the name of the lchoice operation
+---
+--- For instance, these types and operations can be implemented as follows
+--- in Curry:
+---
+---     data Choice = Plan Bool Choice Choice
+---     
+---     choose :: Choice -> Bool
+---     choose (Plan True  _ _) = True
+---     choose (Plan False _ _) = False
+---     
+---     lchoice :: Choice -> Choice
+---     lchoice (Plan _ l _) = l
+---     
+---     rchoice :: Choice -> Choice
+---     rchoice (Plan _ _ r) = r
+---
+--- As an example, consider the following operations:
+---
+---     insert :: a -> [a] -> [a]
+---     insert x []     = [x]
+---     insert x (y:ys) = x : y: ys ? y : insert x ys
+---     
+---     perm :: [a] -> [a]
+---     perm []     = []
+---     perm (x:xs) = insert x (perm xs)
+---     
+--- Since both operations are non-deterministic, they are transformed
+--- into the following code:
+---     
+---     insert :: Choice -> a -> [a] -> [a]
+---     insert _ x []     = [x]
+---     insert c x (y:ys) = if choose c then x : y: ys
+---                                     else y : insert (lchoice c) x ys
+---     
+---     perm :: Choice -> [a] -> [a]
+---     perm _ []     = []
+---     perm c (x:xs) = insert (lchoice c) x (perm (rchoice c) xs)
+---
+addChoiceFuncDecl :: [(QName,Bool)] -> (TypeExpr,QName,QName,QName)
+                  -> TAFuncDecl -> TAFuncDecl
+addChoiceFuncDecl _ _ fdecl@(AFunc _ _ _ _ (AExternal _ _)) = fdecl
+addChoiceFuncDecl ndinfo (cpType,chooseF,lchoiceF,rchoiceF)
+                  fdecl@(AFunc qn ar vis texp (ARule tr args rhs)) =
   if hasNonDetInfo ndinfo qn
     then AFunc qn (ar + 1) vis (FuncType cpType texp)
                (ARule tr (carg : args) (snd (choiceExp choices rhs)))
     else fdecl
  where
   cpVar  = maximum (0 : map fst args ++ allVars rhs) + 1
-  cpType = TCons (pre "Choice") []
   carg   = (cpVar, cpType)
   -- number of non-deterministic operations in right-hand side:
   numnds = orOfExpr rhs +
@@ -125,7 +173,7 @@ addChoiceFuncDecl ndinfo fdecl@(AFunc qn ar vis texp (ARule tr args rhs)) =
        AComb te FuncCall
              (pre "if_then_else",
               FuncType (TCons (pre "Bool") []) (FuncType te (FuncType te te)))
-            (AComb boolType FuncCall (pre "choose",chooseType) [head chs] : es))
+            (AComb boolType FuncCall (chooseF, chooseType) [head chs] : es))
     ALet te bs e ->
       let (ch1,e1:bes1) = choiceExps chs (e : map snd bs)
       in (ch1, ALet te (zip (map fst bs) bes1) e1)
@@ -134,8 +182,8 @@ addChoiceFuncDecl ndinfo fdecl@(AFunc qn ar vis texp (ARule tr args rhs)) =
     ATyped te e ty  -> let (ch1,e1) = choiceExp chs e
                        in (ch1, ATyped te e1 ty)
    where
+    boolType   = TCons (pre "Bool") []
     chooseType = FuncType cpType boolType
-    boolType = TCons (pre "Bool") []
 
   choiceExps chs [] = (chs,[])
   choiceExps chs (e:es) = let (ch1,e1)  = choiceExp  chs e
@@ -150,9 +198,9 @@ addChoiceFuncDecl ndinfo fdecl@(AFunc qn ar vis texp (ARule tr args rhs)) =
     = [ch]
     | otherwise
     = choicesFor (n `div` 2)
-                 (AComb cpType FuncCall (pre "lchoice", lrchType) [ch]) ++
+                 (AComb cpType FuncCall (lchoiceF, lrchType) [ch]) ++
       choicesFor (n - n `div` 2)
-                 (AComb cpType FuncCall (pre "rchoice", lrchType) [ch])
+                 (AComb cpType FuncCall (rchoiceF, lrchType) [ch])
    where
     lrchType = FuncType cpType cpType
 

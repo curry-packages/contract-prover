@@ -7,7 +7,7 @@
 --- SMT-LIB language specified in the package `smtlib`.
 ---
 --- @author  Michael Hanus
---- @version August 2019
+--- @version September 2019
 ------------------------------------------------------------------------------
 
 module ESMT where
@@ -389,7 +389,7 @@ sortIdsOfSort (SComb s ss) = s : concatMap sortIdsOfSort ss
 
 -- Get all sorts occurring in a term.
 sortsOfTerm :: Term -> [Sort]
-sortsOfTerm (TConst l) = []
+sortsOfTerm (TConst _) = []
 sortsOfTerm (TSVar  _) = []
 sortsOfTerm (Let bs t) = concatMap (sortsOfTerm . snd) bs ++ sortsOfTerm t
 sortsOfTerm (Forall vs t) = map sortOfSortedVar vs ++ sortsOfTerm t

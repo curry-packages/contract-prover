@@ -2,7 +2,7 @@
 --- A tool to translate FlatCurry operations into SMT assertions.
 ---
 --- @author  Michael Hanus
---- @version August 2019
+--- @version September 2019
 ---------------------------------------------------------------------------
 
 module Curry2SMT where
@@ -43,7 +43,9 @@ funcs2SMT opts vstref qns = do
     "Operations to be axiomatized in SMT:" :
     map (showCurryFuncDecl snd snd . unAnnFuncDecl) funs
   let ndinfo = nondetOfFuncDecls funs
-      tfuns  = map (addChoiceFuncDecl ndinfo) funs
+      choicePlan = (TCons (pre "Choice") [],
+                    pre "choose", pre "lchoice", pre "rchoice")
+      tfuns  = map (addChoiceFuncDecl ndinfo choicePlan) funs
   unless (null ndinfo) $ printWhenAll opts $
     "Non-determinism status of these operations:\n" ++
     unlines ((map showND) ndinfo)
