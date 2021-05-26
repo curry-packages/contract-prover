@@ -1,24 +1,27 @@
 {
   "name": "contract-prover",
-    "version": "1.0.0",
+    "version": "3.0.0",
     "author": "Michael Hanus <mh@informatik.uni-kiel.de>",
     "synopsis": "A tool to verify contracts in FlatCurry programs",
     "category": [ "Optimization", "Verification" ],
     "license": "BSD-3-Clause",
     "licenseFile": "LICENSE",
     "dependencies": {
-        "base"               : ">= 1.0.0, < 2.0.0",
-        "contracts"          : ">= 0.0.1",
-        "currypath"          : ">= 0.0.1",
-        "finite-map"         : ">= 0.0.1",
-        "flatcurry"          : ">= 1.0.0",
-        "flatcurry-annotated": ">= 1.0.0",
-        "showflatcurry"      : ">= 0.0.1",
-        "wl-pprint"          : ">= 0.0.1"
-    },
-    "compilerCompatibility": {
-        "pakcs": ">= 2.0.0, < 3.0.0",
-        "kics2": ">= 2.0.0, < 3.0.0"
+        "base"                    : ">= 3.0.0, < 4.0.0",
+        "containers"              : ">= 3.0.0, < 4.0.0",
+        "contracts"               : ">= 3.0.0, < 4.0.0",
+        "currypath"               : ">= 3.0.0, < 4.0.0",
+        "directory"               : ">= 3.0.0, < 4.0.0",
+        "filepath"                : ">= 3.0.0, < 4.0.0",
+        "flatcurry"               : ">= 3.0.0, < 4.0.0",
+        "flatcurry-annotated"     : ">= 3.3.0, < 4.0.0",
+        "flatcurry-type-annotated": ">= 3.3.0, < 4.0.0",
+        "io-extra"                : ">= 3.0.0, < 4.0.0",
+        "process"                 : ">= 3.0.0, < 4.0.0",
+        "read-legacy"             : ">= 3.0.0, < 4.0.0",
+        "showflatcurry"           : ">= 3.0.0, < 4.0.0",
+        "transformers"            : ">= 3.0.0, < 4.0.0",
+        "wl-pprint"               : ">= 3.0.0, < 4.0.0"
     },
     "configModule": "PackageConfig",
     "executable": {

@@ -7,14 +7,14 @@
 --- SMT-LIB language specified in the package `smtlib`.
 ---
 --- @author  Michael Hanus
---- @version September 2019
+--- @version November 2020
 ------------------------------------------------------------------------------
 
 module ESMT where
 
-import List ( (\\), intercalate, isPrefixOf, union )
+import Data.List ( (\\), intercalate, isPrefixOf, union )
 
-import Data.FiniteMap
+import qualified Data.Map as FM
 import Text.Pretty
 
 ------------------------------------------------------------------------------
@@ -248,19 +248,20 @@ typeParamsOfFunSig (FunSig _ ss s) =
   foldr union [] (map typeParamsOfSort (ss++[s]))
 
 --- A type paramter substitution.
-type TPSubst = FM Ident Sort
+type TPSubst = FM.Map Ident Sort
 
 --- The empty substitution
 emptyTPSubst :: TPSubst
-emptyTPSubst = emptyFM (<)
+emptyTPSubst = FM.empty
 
 ----------------------------------------------------------------------------
 --- Compute sort matching, i.e., if `matchSort t1 t2 = s`, then `t2 = s(t1)`.
 matchSort :: Sort -> Sort -> Maybe TPSubst
 matchSort s1@(SComb sn1 ss1) s2@(SComb sn2 ss2)
  | isTypeParameter s1
- = Just $ if s1 == s2 then emptyTPSubst
-                      else addToFM emptyTPSubst (head (typeParamsOfSort s1)) s2
+ = Just $ if s1 == s2
+            then emptyTPSubst
+            else FM.insert (head (typeParamsOfSort s1)) s2 emptyTPSubst
  | otherwise
  = if sn1 == sn2 then matchSorts ss1 ss2 else Nothing
 
@@ -271,12 +272,12 @@ matchSorts (_:_)    []       = Nothing
 matchSorts (t1:ts1) (t2:ts2) = do
   s <- matchSort t1 t2
   t <- matchSorts (map (substSort s) ts1)(map (substSort s) ts2)
-  return (plusFM s t)
+  return (FM.union s t)
 
 --- Applies a sort substitution to a sort.
 substSort :: TPSubst -> Sort -> Sort
 substSort sub (SComb sn ss) =
-  maybe (SComb sn (map (substSort sub) ss)) id (lookupFM sub sn)
+  maybe (SComb sn (map (substSort sub) ss)) id (FM.lookup sn sub)
 
 --- Applies a sort substitution to a term.
 substTerm :: TPSubst -> Term -> Term
@@ -301,7 +302,7 @@ substFunSig sub (FunSig fn ss s) =
 
 substDefSig :: TPSubst -> FunSigTerm -> FunSigTerm
 substDefSig tsub (ps, fsig, term) =
-  (ps \\ keysFM tsub, substFunSig tsub fsig, substTerm tsub term)
+  (ps \\ FM.keys tsub, substFunSig tsub fsig, substTerm tsub term)
 
 --------------------------------------------------------------------------
 -- Rename identifiers.
@@ -526,7 +527,7 @@ toTInstName fn ps tsub n | fn == n   = addTInstName ps tsub n
 -- a list of type parameters and a type substitution.
 addTInstName :: [Ident] -> TPSubst -> Ident -> Ident
 addTInstName tps tsub n =
-  n ++ concatMap (\p -> maybe "" (('_':) . showSort) (lookupFM tsub p)) tps
+  n ++ concatMap (\p -> maybe "" (('_':) . showSort) (FM.lookup p tsub)) tps
 
 -- All signatures in a list of commands.
 allSigs :: [Command] -> [FunSigTerm]

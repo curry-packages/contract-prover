@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version September 2019
+--- @version May 2021
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -13,28 +13,32 @@
 
 module ContractProver where
 
-import Directory    ( doesFileExist )
-import Integer      ( ilog )
-import IOExts
-import List         ( deleteBy, elemIndex, find, init, intersect, isSuffixOf
-                    , maximum, minimum, nub, partition, splitOn, union )
-import Maybe        ( catMaybes, isJust )
-import ReadShowTerm ( showTerm )
-import State
-import System       ( exitWith, getArgs, getEnviron, system )
+import Control.Monad      ( when, unless )
+import Data.IORef
+import Data.List          ( deleteBy, elemIndex, find, init, intersect
+                          , isSuffixOf, maximum, minimum, nub, partition
+                          , splitOn, union )
+import Data.Maybe         ( catMaybes, isJust )
+import System.Environment ( getArgs, getEnv )
 
 -- Imports from dependencies:
 import Contract.Names
-import Contract.Usage ( checkContractUsage )
-import FilePath                    ( (</>) )
+import Contract.Usage                    ( checkContractUsage )
+import Control.Monad.Trans.State         ( State, get, put, runState )
+import System.FilePath                   ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
 import qualified FlatCurry.Goodies as FCG
-import FlatCurry.Annotated.Files ( readTypedFlatCurry, typedFlatCurryFileName )
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
-import FlatCurry.Annotated.TypeSubst ( substRule )
-import ShowFlatCurry                 ( showCurryModule )
+import FlatCurry.TypeAnnotated.Files     ( readTypeAnnotatedFlatCurry
+                                         , typeAnnotatedFlatCurryFileName 
+                                         , writeTypeAnnotatedFlatCurryFile )
+import FlatCurry.TypeAnnotated.TypeSubst ( substRule )
+import FlatCurry.ShowIntMod              ( showCurryModule )
+import System.Directory                  ( doesFileExist )
+import System.IOExts                     ( evalCmd )
+import System.Process                    ( exitWith, system )
 
 -- Imports from package modules:
 import ESMT
@@ -54,8 +58,8 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-   bannerText = "Contract Checking/Verification Tool (Version of 06/09/19)"
-   bannerLine = take (length bannerText) (repeat '=')
+  bannerText = "Contract Checking/Verification Tool (Version of 26/05/21)"
+  bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
 contractCheckerModule :: String
@@ -120,8 +124,8 @@ proveContractsInProg opts oprog = do
   when (areContractsAdded vst2) $ do
     when (optFCY opts) $
       writeTransformedFCY opts (flatCurryFileName mname) unewprog
-    when (optTFCY opts) $
-      writeTransformedTFCY opts (typedFlatCurryFileName mname) prog3
+    when (optTAFCY opts) $
+      writeTransformedTAFCY opts (typeAnnotatedFlatCurryFileName mname) prog3
   printWhenStatus opts (showStats vst2)
  where
   line = take 78 (repeat '-')
@@ -139,21 +143,18 @@ writeTransformedFCY opts progfile prog = do
                              (FCG.updProgImports (`union` ccimps) prog))
   printWhenStatus opts $ "Transformed program written to: " ++ progfile
 
--- Writes the transformed typed FlatCurry program together with the contents
--- of the auxiliary `contractCheckerModule`.
-writeTransformedTFCY :: Options -> String -> TAProg -> IO ()
-writeTransformedTFCY opts progfile prog = do
-  ccprog <- readTypedFlatCurry contractCheckerModule
+-- Writes the transformed type-annotated FlatCurry program
+-- together with the contents of the auxiliary `contractCheckerModule`.
+writeTransformedTAFCY :: Options -> String -> TAProg -> IO ()
+writeTransformedTAFCY opts progfile prog = do
+  ccprog <- readTypeAnnotatedFlatCurry contractCheckerModule
   let rnmccprog = rnmProg (progName prog) ccprog
       ccimps    = progImports rnmccprog
       ccfuncs   = progFuncs rnmccprog
-  writeTFCY progfile
-            (updProgFuncs (++ ccfuncs)
-                          (updProgImports (`union` ccimps) prog))
+  writeTypeAnnotatedFlatCurryFile progfile
+     (updProgFuncs (++ ccfuncs)
+                   (updProgImports (`union` ccimps) prog))
   printWhenStatus opts $ "Transformed program written to: " ++ progfile
- where
-  -- should go into FlatCurry.Annotated.Files
-  writeTFCY file tprog = writeFile file (showTerm tprog)
 
 ---------------------------------------------------------------------------
 -- The state of the transformation process contains
@@ -168,6 +169,9 @@ data TransState = TransState
 
 makeTransState :: Int -> [(Int,TypeExpr)] -> TransState
 makeTransState = TransState tTrue
+
+emptyTransState :: TransState
+emptyTransState = makeTransState 0 []
 
 -- Increments fresh variable index.
 incFreshVarIndex :: TransState -> TransState
@@ -188,7 +192,7 @@ addPreConditionCheck ty ct qf@(mn,fn) tys args =
      FuncType ty (FuncType boolType (FuncType stringType (FuncType tt ty))))
     [ AComb ty ct (toNoCheckQName qf,tys) args
     , AComb boolType ct (toPreCondQName qf, pctype) args
-    , string2TFCY fn
+    , string2TAFCY fn
     , tupleExpr args
     ]
  where
@@ -218,7 +222,7 @@ addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
                            (FuncType stringType (FuncType tt ty))))
     [ rhs
     , AComb boolType (FuncPartCall 1) (toPostCondQName qf, ty) args
-    , string2TFCY fn
+    , string2TAFCY fn
     , tupleExpr args
     ]
  where
@@ -280,7 +284,7 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
   let targs = zip [1..] (map snd rargs)
       -- compute precondition of operation:
       s0 = makeTransState (maximum (0 : map fst rargs ++ allVars rhs) + 1) rargs
-      (precondformula,s1) = preCondExpOf ti qn targs s0
+      (precondformula,s1) = runState (preCondExpOf ti qn targs) s0
       s2 = s1 { preCond = precondformula }
   newrhs <- optPreCondInExp s2 rhs
   return (ARule rty rargs newrhs)
@@ -294,10 +298,10 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
           if toPreCondQName qf `elem` map funcName (preConds ti)
             then do
               printWhenIntermediate opts $ "Checking call to " ++ snd qf
-              let ((bs,_)     ,pts1) = normalizeArgs nargs pts
-                  (bindexps   ,pts2) = mapS (binding2SMT True ti) bs pts1
-                  (precondcall,pts3) = preCondExpOf ti qf
-                                     (zip (map fst bs) (map annExpr args)) pts2
+              let ((bs,_)     ,pts1) = runState (normalizeArgs nargs) pts
+                  (bindexps   ,pts2) = runState (mapM (binding2SMT True ti) bs) pts1
+                  (precondcall,pts3) = runState (preCondExpOf ti qf
+                                     (zip (map fst bs) (map annExpr args))) pts2
               -- TODO: select from 'bindexps' only demanded argument positions
               let title = "SMT script to verify precondition of '" ++ snd qf ++
                           "' in function '" ++ fn ++ "'"
@@ -319,7 +323,8 @@ optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
     ACase ty ct e brs -> do
       ne <- optPreCondInExp pts e
       let freshvar = freshVar pts
-          (be,pts1) = binding2SMT True ti (freshvar,ne) (incFreshVarIndex pts)
+          (be,pts1) = runState (binding2SMT True ti (freshvar,ne))
+                               (incFreshVarIndex pts)
           pts2 = pts1 { preCond = tConj [preCond pts, be]
                       , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
       nbrs <- mapM (optPreCondInBranch pts2 freshvar) brs
@@ -400,11 +405,12 @@ provePostCondition opts ti postfun allfuns vstref = do
     let farity = funcArity checkfun
         ftype  = funcType checkfun
         targsr = zip [1..] (argTypes ftype ++ [resultType ftype])
-        (bodyformula,s0) = extractPostConditionProofObligation ti [1 .. farity]
-                             (farity+1) (funcRule checkfun)
-        (precondformula,s1)  = preCondExpOf ti orgqn (init targsr) s0
-        (postcondformula,s2) = (applyFunc postfun targsr `bindS`
-                                pred2smt) s1
+        (bodyformula,s0) = runState (extractPostConditionProofObligation ti
+                                       [1 .. farity] (farity+1)
+                                       (funcRule checkfun)) emptyTransState
+        (precondformula,s1)  = runState (preCondExpOf ti orgqn (init targsr)) s0
+        (postcondformula,s2) = runState (applyFunc postfun targsr >>= pred2smt)
+                                        s1
     let title = "verify postcondition of '" ++ mainfunc ++ "'..."
     printWhenIntermediate opts $ "Trying to " ++ title
     pcproof <- checkImplication opts vstref ("SMT script to " ++ title)
@@ -432,33 +438,35 @@ addPostConditionTo pfname fdecl = let fn = funcName fdecl in
 
 
 extractPostConditionProofObligation :: VerifyInfo -> [Int] -> Int -> TARule
-                                    -> (Term,TransState)
+                                    -> State TransState Term
 extractPostConditionProofObligation _ _ _ (AExternal _ s) =
-  (tComb ("External: " ++ s) [], makeTransState 0 [])
-extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =
+  return $ tComb ("External: " ++ s) []
+extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =do
   let exp    = rnmAllVars renameRuleVar orgexp
-      rtype  = resType (length orgargs) ty
-      state0 = makeTransState (maximum (resvar : allVars exp) + 1)
-                              ((resvar, rtype) : zip args (map snd orgargs))
-  in binding2SMT True ti (resvar,exp) state0
+      rtype  = resType (length orgargs) (stripForall ty)
+  put $ makeTransState (maximum (resvar : allVars exp) + 1)
+                       ((resvar, rtype) : zip args (map snd orgargs))
+  binding2SMT True ti (resvar,exp)
  where
   maxArgResult = maximum (resvar : args)
   renameRuleVar r = maybe (r + maxArgResult + 1)
                           (args!!)
                           (elemIndex r (map fst orgargs))
 
-  resType n te = if n==0
-                   then te
-                   else case te of FuncType _ rt -> resType (n-1) rt
-                                   _ -> error "Internal errror: resType!"
+  resType n te =
+    if n==0
+      then te
+      else case te of
+             FuncType _ rt -> resType (n-1) rt
+             _             -> error $ "Internal errror: resType: " ++ show te
 
 -- Returns the precondition expression for a given operation
 -- and its arguments (which are assumed to be variable indices).
 -- Rename all local variables by adding the `freshvar` index to them.
 preCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)] -> State TransState Term
 preCondExpOf ti qf args =
-  maybe (returnS tTrue)
-        (\fd -> applyFunc fd args `bindS` pred2smt)
+  maybe (return tTrue)
+        (\fd -> applyFunc fd args >>= pred2smt)
         (find (\fd -> decodeContractQName (funcName fd)
                         == toPreCondQName (fromNoCheckQName qf))
               (preConds ti))
@@ -470,8 +478,8 @@ preCondExpOf ti qf args =
 postCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)]
               -> State TransState Term
 postCondExpOf ti qf args =
-  maybe (returnS tTrue)
-        (\fd -> applyFunc fd args `bindS` pred2smt)
+  maybe (return tTrue)
+        (\fd -> applyFunc fd args >>= pred2smt)
         (find (\fd -> decodeContractQName (funcName fd)
                         == toPostCondQName (fromNoCheckQName qf))
               (postConds ti))
@@ -482,23 +490,24 @@ postCondExpOf ti qf args =
 -- All local variables are renamed by adding `freshvar` to them.
 -- Also the new fresh variable index is returned.
 applyFunc :: TAFuncDecl -> [(Int,TypeExpr)] -> State TransState TAExpr
-applyFunc fdecl targs s0 =
-  let tsub = maybe (error $ "applyFunc: types\n" ++
+applyFunc fdecl targs = do
+  ts <- get
+  let fv   = freshVar ts
+      tsub = maybe (error $ "applyFunc: types\n" ++
                             show (argTypes (funcType fdecl)) ++ "\n" ++
                             show (map snd targs) ++ "\ndo not match!")
                    id
                    (matchTypes (argTypes (funcType fdecl)) (map snd targs))
       (ARule _ orgargs orgexp) = substRule tsub (funcRule fdecl)
-      exp = rnmAllVars (renameRuleVar orgargs) orgexp
-      s1  = s0 { freshVar = max (freshVar s0)
-                                (maximum (0 : args ++ allVars exp) + 1) }
-  in (simpExpr $ applyArgs exp (drop (length orgargs) args), s1)
+      exp = rnmAllVars (renameRuleVar fv orgargs) orgexp
+  put ts { freshVar = max fv (maximum (0 : args ++ allVars exp) + 1) }
+  return $ simpExpr $ applyArgs exp (drop (length orgargs) args)
  where
   args = map fst targs
   -- renaming function for variables in original rule:
-  renameRuleVar orgargs r = maybe (r + freshVar s0)
-                                  (args!!)
-                                  (elemIndex r (map fst orgargs))
+  renameRuleVar fv orgargs r = maybe (r + fv)
+                                     (args!!)
+                                     (elemIndex r (map fst orgargs))
 
   applyArgs e [] = e
   applyArgs e (v:vs) =
@@ -510,13 +519,13 @@ applyFunc fdecl targs s0 =
 -- Translates a Boolean FlatCurry expression into an SMT formula.
 pred2smt :: TAExpr -> State TransState Term
 pred2smt exp = case exp of
-  AVar _ i              -> returnS (TSVar i)
-  ALit _ l              -> returnS (lit2SMT l)
+  AVar _ i              -> return (TSVar i)
+  ALit _ l              -> return (lit2SMT l)
   AComb _ ct (qf,ftype) args ->
     if qf == pre "not" && length args == 1
-      then pred2smt (head args) `bindS` \barg -> returnS (tNot barg)
-      else mapS pred2smt args `bindS` \bargs ->
-           returnS (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
+      then pred2smt (head args) >>= \barg -> return (tNot barg)
+      else mapM pred2smt args >>= \bargs ->
+           return (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
                                     False qf ftype) bargs)
   _     -> error $ "Translation of some Boolean expressions into SMT " ++
                    "not yet supported:\n" ++ show (unAnnExpr exp)
@@ -537,35 +546,35 @@ binding2SMT odemanded vi (oresvar,oexp) =
   exp2smt odemanded (oresvar, simpExpr oexp)
  where
   exp2smt demanded (resvar,exp) = case exp of
-    AVar _ i -> returnS $ if resvar==i then tTrue
+    AVar _ i -> return $ if resvar==i then tTrue
                                        else tEquVar resvar (TSVar i)
-    ALit _ l -> returnS (tEquVar resvar (lit2SMT l))
+    ALit _ l -> return (tEquVar resvar (lit2SMT l))
     AComb ty ct (qf,_) args ->
       if qf == pre "?" && length args == 2
         then exp2smt demanded (resvar, AOr ty (args!!0) (args!!1))
-        else normalizeArgs args `bindS` \ (bs,nargs) ->
+        else normalizeArgs args >>= \ (bs,nargs) ->
              -- TODO: select from 'bindexps' only demanded argument positions
-             mapS (exp2smt (isPrimOp qf || optStrict (toolOpts vi)))
-                  bs `bindS` \bindexps ->
+             mapM (exp2smt (isPrimOp qf || optStrict (toolOpts vi)))
+                  bs >>= \bindexps ->
              comb2smt qf ty ct nargs bs bindexps
     ALet _ bs e ->
-      getS `bindS` \ts ->
-      putS (addVarTypes (map fst bs) ts) `bindS_`
-      mapS (exp2smt False)
-           (map (\ ((i,_),ae) -> (i,ae)) bs) `bindS` \bindexps ->
-      exp2smt demanded (resvar,e) `bindS` \bexp ->
-      returnS (tConj (bindexps ++ [bexp]))
+      get >>= \ts ->
+      put (addVarTypes (map fst bs) ts) >>
+      mapM (exp2smt False)
+           (map (\ ((i,_),ae) -> (i,ae)) bs) >>= \bindexps ->
+      exp2smt demanded (resvar,e) >>= \bexp ->
+      return (tConj (bindexps ++ [bexp]))
     AOr _ e1 e2  ->
-      exp2smt demanded (resvar,e1) `bindS` \bexp1 ->
-      exp2smt demanded (resvar,e2) `bindS` \bexp2 ->
-      returnS (tDisj [bexp1, bexp2])
+      exp2smt demanded (resvar,e1) >>= \bexp1 ->
+      exp2smt demanded (resvar,e2) >>= \bexp2 ->
+      return (tDisj [bexp1, bexp2])
     ACase _ _ e brs   ->
-      getS `bindS` \ts ->
+      get >>= \ts ->
       let freshvar = freshVar ts in
-      putS (addVarTypes [(freshvar, annExpr e)] (incFreshVarIndex ts)) `bindS_`
-      exp2smt demanded (freshvar,e) `bindS` \argbexp ->
-      mapS branch2smt (map (\b->(freshvar,b)) brs) `bindS` \bbrs ->
-      returnS (tConj [argbexp, tDisj bbrs])
+      put (addVarTypes [(freshvar, annExpr e)] (incFreshVarIndex ts)) >>
+      exp2smt demanded (freshvar,e) >>= \argbexp ->
+      mapM branch2smt (map (\b->(freshvar,b)) brs) >>= \bbrs ->
+      return (tConj [argbexp, tDisj bbrs])
     ATyped _ e _ -> exp2smt demanded (resvar,e)
     AFree _ _ _ -> error "Free variables not yet supported!"
    where
@@ -573,30 +582,30 @@ binding2SMT odemanded vi (oresvar,oexp) =
      | qf == pre "otherwise"
        -- specific handling for the moment since the front end inserts it
        -- as the last alternative of guarded rules...
-     = returnS (tEquVar resvar tTrue)
+     = return (tEquVar resvar tTrue)
      | ct == ConsCall -- translate data constructor
-     = returnS (tConj (bindexps ++
+     = return (tConj (bindexps ++
                       [tEquVar resvar
                                (TComb (cons2SMT (null nargs) False qf rtype)
                                       (map arg2smt nargs))]))
      | qf == pre "apply"
      = -- cannot translate h.o. apply: ignore it
-       returnS tTrue
+       return tTrue
      | isPrimOp qf
-     = returnS (tConj (bindexps ++
+     = return (tConj (bindexps ++
                       [tEquVar resvar (TComb (cons2SMT True False qf rtype)
                                              (map arg2smt nargs))]))
      | otherwise -- non-primitive operation: add contract only if demanded
      = let targs = zip (map fst bs) (map annExpr nargs) in
-       preCondExpOf vi qf targs `bindS` \precond ->
-       postCondExpOf vi qf (targs ++ [(resvar,rtype)]) `bindS` \postcond ->
-       returnS (tConj (bindexps ++ if demanded then [precond,postcond] else []))
+       preCondExpOf vi qf targs >>= \precond ->
+       postCondExpOf vi qf (targs ++ [(resvar,rtype)]) >>= \postcond ->
+       return (tConj (bindexps ++ if demanded then [precond,postcond] else []))
     
     branch2smt (cvar, (ABranch p e)) =
-      exp2smt demanded (resvar,e) `bindS` \branchbexp ->
-      getS `bindS` \ts ->
-      putS ts { varTypes = patvars ++ varTypes ts} `bindS_`
-      returnS (tConj [ tEquVar cvar (pat2SMT p), branchbexp])
+      exp2smt demanded (resvar,e) >>= \branchbexp ->
+      get >>= \ts ->
+      put ts { varTypes = patvars ++ varTypes ts} >>
+      return (tConj [ tEquVar cvar (pat2SMT p), branchbexp])
      where
       patvars = if isConsPattern p
                   then patArgs p
@@ -607,16 +616,16 @@ binding2SMT odemanded vi (oresvar,oexp) =
                           _        -> error $ "Not normalized: " ++ show e
 
 normalizeArgs :: [TAExpr] -> State TransState ([(Int,TAExpr)],[TAExpr])
-normalizeArgs [] = returnS ([],[])
+normalizeArgs [] = return ([],[])
 normalizeArgs (e:es) = case e of
-  AVar _ i -> normalizeArgs es `bindS` \ (bs,nes) ->
-              returnS ((i,e):bs, e:nes)
-  _        -> getS `bindS` \ts ->
+  AVar _ i -> normalizeArgs es >>= \ (bs,nes) ->
+              return ((i,e):bs, e:nes)
+  _        -> get >>= \ts ->
               let fvar = freshVar ts
                   nts  = addVarTypes [(fvar,annExpr e)] (incFreshVarIndex ts)
-              in putS nts `bindS_`
-                 normalizeArgs es `bindS` \ (bs,nes) ->
-                 returnS ((fvar,e):bs, AVar (annExpr e) fvar : nes)
+              in put nts >>
+                 normalizeArgs es >>= \ (bs,nes) ->
+                 return ((fvar,e):bs, AVar (annExpr e) fvar : nes)
 
 
 unzipBranches :: [TABranchExpr] -> ([TAPattern],[TAExpr])
@@ -774,9 +783,9 @@ tconsOfTypeExpr (ForallType _ te) =  tconsOfTypeExpr te
 --- Checks whether a file exists in one of the directories on the PATH.
 fileInPath :: String -> IO Bool
 fileInPath file = do
-  path <- getEnviron "PATH"
+  path <- getEnv "PATH"
   dirs <- return $ splitOn ":" path
-  (liftIO (any id)) $ mapM (doesFileExist . (</> file)) dirs
+  (fmap (any id)) $ mapM (doesFileExist . (</> file)) dirs
 
 -- Shows a qualified name by replacing all dots by underscores.
 showQNameNoDots :: QName -> String
@@ -791,3 +800,13 @@ showWithLineNums txt =
   in unlines . map (uncurry (++)) . zip (map showNum [1..]) $ txtlines
 
 ---------------------------------------------------------------------------
+--- The value of `ilog n` is the floor of the logarithm
+--- in the base 10 of `n`.
+--- Fails if `n &lt;= 0`.
+--- For positive integers, the returned value is
+--- 1 less the number of digits in the decimal representation of `n`.
+---
+--- @param n - The argument.
+--- @return the floor of the logarithm in the base 10 of `n`.
+ilog :: Int -> Int
+ilog n | n>0 = if n<10 then 0 else 1 + ilog (n `div` 10)

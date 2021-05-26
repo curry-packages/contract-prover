@@ -19,14 +19,14 @@
 --- by showing their correct behavior for all possible plans.
 ---
 --- @author  Michael Hanus
---- @version September 2019
+--- @version November 2020
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.NonDet2Det
   ( nondetOfFuncDecls, addChoiceFuncDecl )
  where
 
-import List ( maximum, nub )
+import Data.List ( maximum, nub )
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies

@@ -3,7 +3,7 @@
 --- related operations.
 ---
 --- @author Michael Hanus
---- @version July 2019
+--- @version May 2021
 -------------------------------------------------------------------------
 
 module ToolOptions
@@ -12,12 +12,13 @@ module ToolOptions
   )
  where
 
-import Char              ( toUpper )
-import GetOpt
-import ReadNumeric       ( readNat )
-import System            ( exitWith )
+import Control.Monad         ( when, unless )
+import Data.Char             ( toUpper )
+import System.Console.GetOpt
+import Numeric               ( readNat )
+import System.Process        ( exitWith )
 
-import System.CurryPath  ( stripCurrySuffix )
+import System.CurryPath      ( stripCurrySuffix )
 
 data Options = Options
   { optVerb    :: Int    -- verbosity (0: quiet, 1: status, 2: interm, 3: all)
@@ -25,7 +26,7 @@ data Options = Options
   , optName    :: String -- show only the name of a nonfail condition
   , optVerify  :: Bool   -- verify contracts (or just add them)?
   , optFCY     :: Bool   -- replace FlatCurry program?
-  , optTFCY    :: Bool   -- replace typed FlatCurry program?
+  , optTAFCY   :: Bool   -- replace type-annotated FlatCurry program?
   , optStrict  :: Bool   -- verify precondition w.r.t. strict evaluation?
                          -- in this case, we assume that all operations are
                          -- strictly evaluated which might give better results
@@ -72,9 +73,9 @@ options =
   , Option "t" ["target"]
             (ReqArg checkTarget "<T>")
            ("target of the transformed program:\n" ++
-            "NONE: do not store transformed FlatCurry program\n" ++
-            "FCY : write FlatCurry program (default)\n" ++
-            "TFCY: write typed FlatCurry program")
+            "NONE : do not store transformed FlatCurry program\n" ++
+            "FCY  : write FlatCurry program (default)\n" ++
+            "TAFCY: write type-annotated FlatCurry program")
   , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))
            "do not write scripts of successful proofs"
   , Option "" ["name"]
@@ -82,21 +83,19 @@ options =
             "only show the names of pre- and postconditions\nfor function <f>"
   ]
  where
-  safeReadNat opttrans s opts =
-   let numError = error "Illegal number argument (try `-h' for help)"
-   in maybe numError
-            (\ (n,rs) -> if null rs then opttrans n opts else numError)
-            (readNat s)
+  safeReadNat opttrans s opts = case readNat s of
+    [(n,"")] -> opttrans n opts
+    _        -> error "Illegal number argument (try `-h' for help)"
 
   checkVerb n opts = if n>=0 && n<4
                        then opts { optVerb = n }
                        else error "Illegal verbosity level (try `-h' for help)"
 
   checkTarget t opts = case map toUpper t of
-    "NONE" -> opts { optFCY = False, optTFCY = False }
-    "FCY"  -> opts { optFCY = True,  optTFCY = False }
-    "TFCY" -> opts { optFCY = False, optTFCY = True  }
-    _      -> error $ "Illegal target `" ++ t ++ "' (try `-h' for help)"
+    "NONE"  -> opts { optFCY = False, optTAFCY = False }
+    "FCY"   -> opts { optFCY = True,  optTAFCY = False }
+    "TAFCY" -> opts { optFCY = False, optTAFCY = True  }
+    _       -> error $ "Illegal target `" ++ t ++ "' (try `-h' for help)"
 
 -------------------------------------------------------------------------
 

@@ -2,21 +2,21 @@
 --- Some operations to read type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version August 2019
+--- @version May 2021
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Read where
 
-import FilePath     ( (</>) )
-import IOExts
-import List         ( find, nub )
-import Maybe        ( fromJust )
+import Data.IORef
+import Data.List         ( find, nub )
+import Data.Maybe        ( fromJust )
 
 -- Imports from dependencies:
-import FlatCurry.Annotated.Files   ( readTypedFlatCurry )
+import FlatCurry.TypeAnnotated.Files ( readTypeAnnotatedFlatCurry )
 import FlatCurry.Annotated.Goodies
-import System.CurryPath ( getLoadPathForModule, lookupModuleSource
-                        , stripCurrySuffix )
+import System.CurryPath              ( getLoadPathForModule, lookupModuleSource
+                                     , stripCurrySuffix )
+import System.FilePath               ( (</>) )
 
 import FlatCurry.Typed.Goodies
 import FlatCurry.Typed.Names
@@ -36,10 +36,12 @@ readSimpTypedFlatCurryWithSpec opts mname =
 
 --- Reads a typed FlatCurry program together with a possible `_SPEC` program
 --- (containing further contracts).
+--- All leading `ForallType` quantifiers are removed from function
+--- signatures since they are not relevant here.
 readTypedFlatCurryWithSpec :: Options -> String -> IO TAProg
 readTypedFlatCurryWithSpec opts mname = do
   printWhenStatus opts $ "Loading typed FlatCurry program '" ++ mname ++ "'"
-  prog     <- readTypedFlatCurry mname
+  prog  <- readTypedFlatCurryWithoutForall mname
   loadpath <- getLoadPathForModule specName
   mbspec   <- lookupModuleSource (loadpath ++ [packagePath </> "include"])
                                  specName
@@ -48,12 +50,25 @@ readTypedFlatCurryWithSpec opts mname = do
            let specpath = stripCurrySuffix specname
            printWhenStatus opts $ "Adding '" ++
              (if optVerb opts > 1 then specpath else specName) ++ "'"
-           specprog <- readTypedFlatCurry specpath
+           specprog <- readTypedFlatCurryWithoutForall specpath
            return (unionTAProg prog (rnmProg mname specprog))
         )
         mbspec
  where
   specName = mname ++ "_SPEC"
+
+--- Reads a typed FlatCurry program and remove all leading
+--- `ForallType` quantifiers from function signatures.
+readTypedFlatCurryWithoutForall :: String -> IO TAProg
+readTypedFlatCurryWithoutForall mname = do
+  prog  <- readTypeAnnotatedFlatCurry mname
+  return $ updProgFuncs (map (updFuncType stripForall)) prog
+
+-- Strip outermost `ForallType` quantifications.
+stripForall :: TypeExpr -> TypeExpr
+stripForall texp = case texp of
+  ForallType _ te  -> stripForall te
+  _                -> texp
 
 ----------------------------------------------------------------------------
 --- Extract all user-defined typed FlatCurry functions that might be called
@@ -82,7 +97,7 @@ getAllFunctions vstref newfuns = do
          opts <- readVerifyInfoRef vstref >>= return . toolOpts
          printWhenStatus opts $
            "Loading module '" ++ mname ++ "' for '"++ snd newfun ++"'"
-         newmod <- readTypedFlatCurry mname >>= return . simpProg
+         newmod <- readTypedFlatCurryWithoutForall mname >>= return . simpProg
          modifyIORef vstref (addProgToState newmod)
          getAllFuncs (newmod : currmods) currfuncs (newfun:newfuncs)
 

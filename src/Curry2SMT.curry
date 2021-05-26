@@ -2,20 +2,21 @@
 --- A tool to translate FlatCurry operations into SMT assertions.
 ---
 --- @author  Michael Hanus
---- @version September 2019
+--- @version May 2021
 ---------------------------------------------------------------------------
 
 module Curry2SMT where
 
-import IOExts
-import List        ( isPrefixOf, nub, union )
-import Maybe       ( fromMaybe )
-import ReadNumeric ( readHex )
+import Control.Monad ( unless )
+import Data.IORef
+import Data.List     ( isPrefixOf, nub, union )
+import Data.Maybe    ( fromMaybe )
+import Numeric       ( readHex )
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies ( argTypes, resultType, unAnnFuncDecl )
 import FlatCurry.Types             ( showQName )
-import ShowFlatCurry               ( showCurryFuncDecl )
+import FlatCurry.ShowIntMod        ( showCurryFuncDecl )
 
 -- Imports from package modules:
 import ESMT
@@ -204,6 +205,8 @@ tcons2SMT (mn,tc)
 tdecl2SMT :: TypeDecl -> Command
 tdecl2SMT (TypeSyn tc _ _ _) =
   error $ "Cannot translate type synonym '" ++ showQName tc ++ "' into SMT!"
+tdecl2SMT (TypeNew tc _ _ _) =
+  error $ "Cannot translate newtype '" ++ showQName tc ++ "' into SMT!"
 tdecl2SMT (Type tc _ tvars consdecls) =
   DeclareDatatypes
    [(tcons2SMT tc, length tvars,
@@ -353,8 +356,10 @@ encodeSpecialChars = concatMap encChar
 decodeSpecialChars :: String -> String
 decodeSpecialChars [] = []
 decodeSpecialChars (c:cs)
-  | c == '%'  = chr (maybe 0 fst (readHex (take 2 cs)))
-                 : decodeSpecialChars (drop 2 cs)
+  | c == '%'  = let n = case readHex (take 2 cs) of
+                          [(h,"")] -> h
+                          _        -> 0
+                in chr n : decodeSpecialChars (drop 2 cs)
   | otherwise = c : decodeSpecialChars cs
 
 

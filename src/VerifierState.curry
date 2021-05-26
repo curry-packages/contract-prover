@@ -1,7 +1,7 @@
 module VerifierState where
 
-import IOExts
-import List ( find )
+import Data.IORef
+import Data.List  ( find )
 
 import Contract.Names ( isPreCondName, isPostCondName )
 import FlatCurry.Annotated.Goodies ( funcName, typeName, progName, progTypes )

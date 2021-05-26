@@ -3,14 +3,14 @@
 --- In particular, it replaces calls to Eq.== implementations by Prelude.==
 ---
 --- @author  Michael Hanus
---- @version May 2019
+--- @version November 2020
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Simplify
   ( simpProg, simpFuncDecl, simpExpr )
  where
 
-import List ( find, isPrefixOf )
+import Data.List ( find, isPrefixOf )
 
 -- Imports from dependencies:
 import FlatCurry.Annotated.Goodies

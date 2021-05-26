@@ -2,21 +2,20 @@
 --- Some operations to construct type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version April 2019
+--- @version May 2021
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Build where
 
-import FilePath     ( (</>) )
-import IOExts
-import List         ( find, nub )
-import Maybe        ( fromJust )
+import Data.IORef
+import Data.List         ( find, nub )
+import Data.Maybe        ( fromJust )
 
 -- Imports from dependencies:
-import FlatCurry.Annotated.Files   ( readTypedFlatCurry )
 import FlatCurry.Annotated.Goodies
 import System.CurryPath ( getLoadPathForModule, lookupModuleSource
                         , stripCurrySuffix )
+import System.FilePath  ( (</>) )
 
 import FlatCurry.Typed.Goodies ( pre )
 --import FlatCurry.Typed.Names
@@ -75,12 +74,12 @@ tupleExpr xs = case length xs of
              ft  = foldr FuncType tt tys
          in AComb tt ConsCall (tupleCons n, ft) xs
 
--- Transforms a string into typed FlatCurry representation.
-string2TFCY :: String -> TAExpr
-string2TFCY [] = AComb stringType ConsCall (pre "[]",stringType) []
-string2TFCY (c:cs) =
+-- Transforms a string into type-annotated FlatCurry representation.
+string2TAFCY :: String -> TAExpr
+string2TAFCY [] = AComb stringType ConsCall (pre "[]",stringType) []
+string2TAFCY (c:cs) =
   AComb stringType ConsCall
         (pre ":", FuncType charType (FuncType stringType stringType))
-        [ALit charType (Charc c), string2TFCY cs]
+        [ALit charType (Charc c), string2TAFCY cs]
 
 ----------------------------------------------------------------------------

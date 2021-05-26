@@ -2,18 +2,18 @@
 --- Some goodies to deal with type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version August 2019
+--- @version May 2021
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Goodies where
 
-import List         ( maximum, nub, union )
+import Data.List         ( maximum, nub, union )
 
 -- Imports from dependencies:
-import Data.FiniteMap
+import qualified Data.Map as FM
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Pretty    ( ppExp )
-import FlatCurry.Annotated.TypeSubst
+import FlatCurry.TypeAnnotated.TypeSubst
 import Text.Pretty                   ( showWidth )
 
 import FlatCurry.Typed.Types
@@ -70,17 +70,20 @@ etaExpandFuncDecl (AFunc qn ar vis texp (ARule tr args rhs)) =
 --- Apply arguments to a given FlatCurry expression by transforming
 --- this expression whenever possible.
 applyExp :: TAExpr -> [TAExpr] -> TAExpr
-applyExp exp [] = exp
+applyExp exp []           = exp
 applyExp exp vars@(v1:vs) = case exp of
   AComb te ct (qf,qt) cargs -> case ct of
     FuncPartCall m -> applyExp (AComb (dropArgTypes 1 te)
                                       (if m==1 then FuncCall
                                                else FuncPartCall (m-1))
-                                      (qf,qt) 
+                                      (qf,qt)
                                       (cargs ++ [v1]))
-                               vs
+                                      vs
     _ -> applyExp (AComb (dropArgTypes 1 te) FuncCall
-                         (pre "apply", FuncType (annExpr v1) te) [exp, v1]) vs
+                         (pre "apply",
+                          FuncType te
+                                   (FuncType (annExpr v1) (dropArgTypes 1 te)))
+                         [exp, v1]) vs
   ACase  te ct e brs -> ACase (adjustType te) ct e
                  (map (\ (ABranch p be) -> ABranch p (applyExp be vars)) brs)
   AOr    te e1 e2 -> AOr (adjustType te) (applyExp e1 vars) (applyExp e2 vars)
@@ -88,11 +91,13 @@ applyExp exp vars@(v1:vs) = case exp of
   AFree  te fvs e -> AFree  (adjustType te) fvs (applyExp e vars)
   ATyped te e ty  -> ATyped (adjustType te) (applyExp e vars) (adjustType ty)
   AVar   te _     -> applyExp (AComb (dropArgTypes 1 te) FuncCall
-                                     (pre "apply", FuncType (annExpr v1) te)
+                                     (pre "apply",
+                                      FuncType te (FuncType (annExpr v1)
+                                                          (dropArgTypes 1 te)))
                                      [exp, v1]) vs
   ALit   _  _     -> error "etaExpandFuncDecl: cannot apply literal"
  where
-  adjustType ty = dropArgTypes (length vars) ty 
+  adjustType ty = dropArgTypes (length vars) ty
 
 --- Remove the given number of argument types from a (nested) functional type.
 dropArgTypes :: Int -> TypeExpr -> TypeExpr
@@ -114,7 +119,7 @@ isBaseType (ForallType _ _) = False
 matchType :: TypeExpr -> TypeExpr -> Maybe AFCSubst
 matchType t1 t2 = case (t1,t2) of
   (TVar v        , _) -> Just $ if t1 == t2 then emptyAFCSubst
-                                            else addToFM emptyAFCSubst v t2
+                                            else FM.insert v t2 emptyAFCSubst
   (TCons tc1 ts1 , TCons tc2 ts2) | tc1 == tc2 -> matchTypes ts1 ts2
   (FuncType a1 r1, FuncType a2 r2) -> matchTypes [a1,r1] [a2,r2]
   (ForallType _ _, _) -> error "matchType: ForallType occurred"
@@ -128,7 +133,7 @@ matchTypes (_:_)    []       = Nothing
 matchTypes (t1:ts1) (t2:ts2) = do
   s <- matchType t1 t2
   t <- matchTypes (map (subst s) ts1)(map (subst s) ts2)
-  return (plusFM s t)
+  return (FM.union s t)
 
 ----------------------------------------------------------------------------
 --- Get all types occurring in function declaration.
