@@ -13,18 +13,18 @@
 
 module ContractProver where
 
-import Control.Monad      ( when, unless )
+import Control.Monad      ( unless, when )
 import Data.IORef
-import Data.List          ( deleteBy, elemIndex, find, init, intersect
-                          , isSuffixOf, maximum, minimum, nub, partition
-                          , splitOn, union )
+import Data.List          ( elemIndex, find, init, maximum, minimum, nub
+                          , partition, splitOn, union )
 import Data.Maybe         ( catMaybes, isJust )
 import System.Environment ( getArgs, getEnv )
 
 -- Imports from dependencies:
 import Contract.Names
 import Contract.Usage                    ( checkContractUsage )
-import Control.Monad.Trans.State         ( State, get, put, runState )
+import Control.Monad.Trans.Class         ( lift )
+import Control.Monad.Trans.State         ( StateT, get, put, evalStateT )
 import System.FilePath                   ( (</>) )
 import FlatCurry.Files
 import FlatCurry.Types
@@ -49,7 +49,7 @@ import FlatCurry.Typed.Goodies
 import FlatCurry.Typed.Names
 import FlatCurry.Typed.Simplify ( simpProg, simpFuncDecl, simpExpr )
 import FlatCurry.Typed.Types
-import PackageConfig  ( packagePath )
+import PackageConfig            ( packagePath )
 import ToolOptions
 import VerifierState
 
@@ -162,7 +162,7 @@ writeTransformedTAFCY opts progfile prog = do
 -- * a fresh variable index
 -- * a list of all introduced variables and their types:
 data TransState = TransState
-  { preCond    :: Term
+  { cAssertion :: Term
   , freshVar   :: Int
   , varTypes   :: [(Int,TypeExpr)]
   }
@@ -173,13 +173,52 @@ makeTransState = TransState tTrue
 emptyTransState :: TransState
 emptyTransState = makeTransState 0 []
 
--- Increments fresh variable index.
-incFreshVarIndex :: TransState -> TransState
-incFreshVarIndex st = st { freshVar = freshVar st + 1 }
+-- The type of the state monad contains the transformation state.
+--type TransStateM a = State TransState a
+type TransStateM a = StateT TransState IO a
 
--- Adds variables to the state.
-addVarTypes :: [(Int,TypeExpr)] -> TransState -> TransState
-addVarTypes vts st = st { varTypes = vts ++ varTypes st }
+-- Gets the current fresh variable index of the state.
+getFreshVarIndex :: TransStateM Int
+getFreshVarIndex = get >>= return . freshVar
+
+-- Sets the fresh variable index in the state.
+setFreshVarIndex :: Int -> TransStateM ()
+setFreshVarIndex fvi = do
+  st <- get
+  put $ st { freshVar = fvi }
+
+-- Gets a fresh variable index and increment the index in the state.
+getFreshVar :: TransStateM Int
+getFreshVar = do
+  st <- get
+  put $ st { freshVar = freshVar st + 1 }
+  return $ freshVar st
+
+-- Gets the variables and their types stored in the state.
+getVarTypes :: TransStateM [(Int,TypeExpr)]
+getVarTypes = get >>= return . varTypes
+
+-- Adds variables and their types to the state.
+addVarTypes :: [(Int,TypeExpr)] -> TransStateM ()
+addVarTypes vts = do
+  st <- get
+  put $ st { varTypes = vts ++ varTypes st }
+
+-- Gets the current assertion stored in the state.
+getAssertion :: TransStateM Term
+getAssertion = get >>= return . cAssertion
+
+-- Sets the current assertion in the state.
+setAssertion :: Term -> TransStateM ()
+setAssertion formula = do
+  st <- get
+  put $ st { cAssertion = formula }
+
+-- Add a formula to the current assertion in the state by conjunction.
+addToAssertion :: Term -> TransStateM ()
+addToAssertion formula = do
+  st <- get
+  put $ st { cAssertion = tConj [cAssertion st, formula] }
 
 ---------------------------------------------------------------------------
 -- Adds a precondition check to a original call of the form
@@ -282,90 +321,94 @@ optPreConditionInRule :: Options -> VerifyInfo -> QName -> TARule
 optPreConditionInRule _ _ _ rl@(AExternal _ _) _ = return rl
 optPreConditionInRule opts ti qn@(_,fn) (ARule rty rargs rhs) vstref = do
   let targs = zip [1..] (map snd rargs)
-      -- compute precondition of operation:
-      s0 = makeTransState (maximum (0 : map fst rargs ++ allVars rhs) + 1) rargs
-      (precondformula,s1) = runState (preCondExpOf ti qn targs) s0
-      s2 = s1 { preCond = precondformula }
-  newrhs <- optPreCondInExp s2 rhs
-  return (ARule rty rargs newrhs)
+      st = makeTransState (maximum (0 : map fst rargs ++ allVars rhs) + 1) rargs
+  (flip evalStateT) st $ do
+    -- compute precondition of operation:
+    precondformula <- preCondExpOf ti qn targs
+    setAssertion precondformula
+    newrhs <- optPreCondInExp rhs
+    return (ARule rty rargs newrhs)
  where
-  optPreCondInExp pts exp = case exp of
+  optPreCondInExp exp = case exp of
     AComb ty ct (qf,tys) args ->
       if qf == ("Prelude","?") && length args == 2
-        then optPreCondInExp pts (AOr ty (args!!0) (args!!1))
+        then optPreCondInExp (AOr ty (args!!0) (args!!1))
         else do
-          nargs <- mapM (optPreCondInExp pts) args
+          precond <- getAssertion
+          nargs <- mapM optPreCondInExp args
           if toPreCondQName qf `elem` map funcName (preConds ti)
             then do
-              printWhenIntermediate opts $ "Checking call to " ++ snd qf
-              let ((bs,_)     ,pts1) = runState (normalizeArgs nargs) pts
-                  (bindexps   ,pts2) = runState (mapM (binding2SMT True ti) bs) pts1
-                  (precondcall,pts3) = runState (preCondExpOf ti qf
-                                     (zip (map fst bs) (map annExpr args))) pts2
+              lift $ printWhenIntermediate opts $ "Checking call to " ++ snd qf
+              (bs,_)   <- normalizeArgs nargs
+              bindexps <- mapM (binding2SMT True ti) bs
+              precondcall <- preCondExpOf ti qf
+                               (zip (map fst bs) (map annExpr args))
               -- TODO: select from 'bindexps' only demanded argument positions
               let title = "SMT script to verify precondition of '" ++ snd qf ++
                           "' in function '" ++ fn ++ "'"
-              pcproof <- checkImplication opts vstref title (varTypes pts3)
-                           (preCond pts) (tConj bindexps) precondcall
+              vartypes <- getVarTypes
+              pcproof <- lift $
+                checkImplication opts vstref title vartypes
+                                 precond (tConj bindexps) precondcall
               let pcvalid = isJust pcproof
-              modifyIORef vstref
-                          (addPreCondToStats (snd qf ++ "("++fn++")") pcvalid)
+              lift $ modifyIORef vstref
+                       (addPreCondToStats (snd qf ++ "("++fn++")") pcvalid)
               if pcvalid
                 then do
-                  printWhenStatus opts $
-                    fn ++ ": PRECONDITION OF '" ++ snd qf ++ "': VERIFIED"
+                  lift $ printWhenStatus opts $
+                          fn ++ ": PRECONDITION OF '" ++ snd qf ++ "': VERIFIED"
                   return $ AComb ty ct (toNoCheckQName qf, tys) nargs
                 else do
-                  printWhenStatus opts $
-                    fn ++ ": PRECOND CHECK ADDED TO '" ++ snd qf ++ "'"
+                  lift $ printWhenStatus opts $
+                           fn ++ ": PRECOND CHECK ADDED TO '" ++ snd qf ++ "'"
                   return $ AComb ty ct (qf,tys) nargs
             else return $ AComb ty ct (qf,tys) nargs
     ACase ty ct e brs -> do
-      ne <- optPreCondInExp pts e
-      let freshvar = freshVar pts
-          (be,pts1) = runState (binding2SMT True ti (freshvar,ne))
-                               (incFreshVarIndex pts)
-          pts2 = pts1 { preCond = tConj [preCond pts, be]
-                      , varTypes = (freshvar,annExpr ne) : varTypes pts1 }
-      nbrs <- mapM (optPreCondInBranch pts2 freshvar) brs
+      ne <- optPreCondInExp e
+      freshvar <- getFreshVar
+      be <- binding2SMT True ti (freshvar,ne)
+      addToAssertion be
+      addVarTypes [ (freshvar, annExpr ne) ]
+      nbrs <- mapM (optPreCondInBranch freshvar) brs
       return $ ACase ty ct ne nbrs
     AOr ty e1 e2 -> do
-      ne1 <- optPreCondInExp pts e1
-      ne2 <- optPreCondInExp pts e2
+      ne1 <- optPreCondInExp e1
+      ne2 <- optPreCondInExp e2
       return $ AOr ty ne1 ne2
     ALet ty bs e -> do
-      nes <- mapM (optPreCondInExp pts) (map snd bs)
-      ne  <- optPreCondInExp pts e
+      nes <- mapM optPreCondInExp (map snd bs)
+      ne  <- optPreCondInExp e
       return $ ALet ty (zip (map fst bs) nes) ne
     AFree ty fvs e -> do
-      ne <- optPreCondInExp pts e
+      ne <- optPreCondInExp e
       return $ AFree ty fvs ne
     ATyped ty e et -> do
-      ne <- optPreCondInExp pts e
+      ne <- optPreCondInExp e
       return $ ATyped ty ne et
     _ -> return exp
 
-  optPreCondInBranch pts dvar branch = do
-    let (ABranch p e, pts1) = renamePatternVars pts branch
-    let npts = pts1 { preCond = tConj [preCond pts1, tEquVar dvar (pat2SMT p)] }
-    ne <- optPreCondInExp npts e
+  optPreCondInBranch dvar branch = do
+    ABranch p e <- renamePatternVars branch
+    addToAssertion (tEquVar dvar (pat2SMT p))
+    ne <- optPreCondInExp e
     return (ABranch p ne)
 
 -- Rename argument variables of constructor pattern
-renamePatternVars :: TransState -> TABranchExpr -> (TABranchExpr,TransState)
-renamePatternVars pts (ABranch p e) =
+renamePatternVars :: TABranchExpr -> TransStateM TABranchExpr
+renamePatternVars (ABranch p e) =
   if isConsPattern p
-    then let args = map fst (patArgs p)
-             minarg = minimum (0 : args)
-             maxarg = maximum (0 : args)
-             fv = freshVar pts
-             rnm i = if i `elem` args then i - minarg + fv else i
-             nargs = map (\ (v,t) -> (rnm v,t)) (patArgs p)
-         in (ABranch (updPatArgs (map (\ (v,t) -> (rnm v,t))) p)
-                     (rnmAllVars rnm e),
-             pts { freshVar = fv + maxarg - minarg + 1
-                 , varTypes = nargs ++ varTypes pts })
-    else (ABranch p e, pts)
+    then do
+      fv <- getFreshVarIndex
+      let args = map fst (patArgs p)
+          minarg = minimum (0 : args)
+          maxarg = maximum (0 : args)
+          rnm i = if i `elem` args then i - minarg + fv else i
+          nargs = map (\ (v,t) -> (rnm v,t)) (patArgs p)
+      setFreshVarIndex (fv + maxarg - minarg + 1)
+      addVarTypes nargs
+      return $ ABranch (updPatArgs (map (\ (v,t) -> (rnm v,t))) p)
+                       (rnmAllVars rnm e)
+    else return $ ABranch p e
 
 ---------------------------------------------------------------------------
 -- Try to verify postconditions: If an operation `f` has a postcondition,
@@ -386,11 +429,12 @@ verifyPostConditions opts prog vstref = do
 provePostCondition :: Options -> VerifyInfo -> TAFuncDecl -> [TAFuncDecl]
                    -> IORef VState -> IO [TAFuncDecl]
 provePostCondition opts ti postfun allfuns vstref = do
-  maybe (putStrLn ("Postcondition: " ++ pcname ++ "\n" ++
-                   "Operation of this postcondition not found!") >>
-         return allfuns)
+  maybe (do putStrLn $ "Postcondition: " ++ pcname ++ "\n" ++
+                       "Operation of this postcondition not found!"
+            return allfuns)
         --(\checkfun -> provePC checkfun) --TODO: simplify definition
-        (\checkfun -> provePC (simpFuncDecl checkfun))
+        (\checkfun -> evalStateT (provePC (simpFuncDecl checkfun))
+                                 emptyTransState)
         (find (\fd -> toPostCondName (snd (funcName fd)) ==
                       decodeContractName pcname)
               allfuns)
@@ -401,30 +445,30 @@ provePostCondition opts ti postfun allfuns vstref = do
     let (postmn,postfn) = funcName postfun
         mainfunc        = snd (funcName checkfun)
         orgqn           = (postmn, reverse (drop 5 (reverse postfn)))
-    --putStrLn $ "Check postcondition of operation " ++ mainfunc
+    -- lift $ putStrLn $ "Check postcondition of operation " ++ mainfunc
     let farity = funcArity checkfun
         ftype  = funcType checkfun
         targsr = zip [1..] (argTypes ftype ++ [resultType ftype])
-        (bodyformula,s0) = runState (extractPostConditionProofObligation ti
-                                       [1 .. farity] (farity+1)
-                                       (funcRule checkfun)) emptyTransState
-        (precondformula,s1)  = runState (preCondExpOf ti orgqn (init targsr)) s0
-        (postcondformula,s2) = runState (applyFunc postfun targsr >>= pred2smt)
-                                        s1
+    bodyformula     <- extractPostConditionProofObligation ti
+                         [1 .. farity] (farity+1) (funcRule checkfun)
+    precondformula  <- preCondExpOf ti orgqn (init targsr)
+    postcondformula <- applyFunc postfun targsr >>= pred2smt
     let title = "verify postcondition of '" ++ mainfunc ++ "'..."
-    printWhenIntermediate opts $ "Trying to " ++ title
-    pcproof <- checkImplication opts vstref ("SMT script to " ++ title)
-                 (varTypes s2) (tConj [precondformula, bodyformula]) tTrue
-                 postcondformula
-    modifyIORef vstref (addPostCondToStats mainfunc (isJust pcproof))
+    lift $ printWhenIntermediate opts $ "Trying to " ++ title
+    vartypes <- getVarTypes
+    pcproof <- lift $
+      checkImplication opts vstref ("SMT script to " ++ title) vartypes
+                       (tConj [precondformula, bodyformula])
+                       tTrue postcondformula
+    lift $ modifyIORef vstref (addPostCondToStats mainfunc (isJust pcproof))
     maybe
-      (do printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK ADDED"
+      (do lift $ (printWhenStatus opts $ mainfunc ++ ": POSTCOND CHECK ADDED")
           return (map (addPostConditionTo (funcName postfun)) allfuns) )
       (\proof -> do
-         unless (optNoProof opts) $
+         unless (optNoProof opts) $ lift $
            writeFile ("PROOF_" ++ showQNameNoDots orgqn ++ "_" ++
                       "SatisfiesPostCondition.smt") proof
-         printWhenStatus opts $ mainfunc ++ ": POSTCONDITION VERIFIED"
+         lift $ printWhenStatus opts $ mainfunc ++ ": POSTCONDITION VERIFIED"
          return allfuns )
       pcproof
 
@@ -438,10 +482,11 @@ addPostConditionTo pfname fdecl = let fn = funcName fdecl in
 
 
 extractPostConditionProofObligation :: VerifyInfo -> [Int] -> Int -> TARule
-                                    -> State TransState Term
+                                    -> TransStateM Term
 extractPostConditionProofObligation _ _ _ (AExternal _ s) =
   return $ tComb ("External: " ++ s) []
-extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =do
+extractPostConditionProofObligation ti args resvar
+                                    (ARule ty orgargs orgexp) = do
   let exp    = rnmAllVars renameRuleVar orgexp
       rtype  = resType (length orgargs) (stripForall ty)
   put $ makeTransState (maximum (resvar : allVars exp) + 1)
@@ -463,7 +508,7 @@ extractPostConditionProofObligation ti args resvar (ARule ty orgargs orgexp) =do
 -- Returns the precondition expression for a given operation
 -- and its arguments (which are assumed to be variable indices).
 -- Rename all local variables by adding the `freshvar` index to them.
-preCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)] -> State TransState Term
+preCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)] -> TransStateM Term
 preCondExpOf ti qf args =
   maybe (return tTrue)
         (\fd -> applyFunc fd args >>= pred2smt)
@@ -475,8 +520,7 @@ preCondExpOf ti qf args =
 -- and its arguments (which are assumed to be variable indices).
 -- Rename all local variables by adding `freshvar` to them and
 -- return the new freshvar value.
-postCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)]
-              -> State TransState Term
+postCondExpOf :: VerifyInfo -> QName -> [(Int,TypeExpr)] -> TransStateM Term
 postCondExpOf ti qf args =
   maybe (return tTrue)
         (\fd -> applyFunc fd args >>= pred2smt)
@@ -489,18 +533,17 @@ postCondExpOf ti qf args =
 -- the renamed body of the function declaration.
 -- All local variables are renamed by adding `freshvar` to them.
 -- Also the new fresh variable index is returned.
-applyFunc :: TAFuncDecl -> [(Int,TypeExpr)] -> State TransState TAExpr
+applyFunc :: TAFuncDecl -> [(Int,TypeExpr)] -> TransStateM TAExpr
 applyFunc fdecl targs = do
-  ts <- get
-  let fv   = freshVar ts
-      tsub = maybe (error $ "applyFunc: types\n" ++
+  fv <- getFreshVarIndex
+  let tsub = maybe (error $ "applyFunc: types\n" ++
                             show (argTypes (funcType fdecl)) ++ "\n" ++
                             show (map snd targs) ++ "\ndo not match!")
                    id
                    (matchTypes (argTypes (funcType fdecl)) (map snd targs))
       (ARule _ orgargs orgexp) = substRule tsub (funcRule fdecl)
       exp = rnmAllVars (renameRuleVar fv orgargs) orgexp
-  put ts { freshVar = max fv (maximum (0 : args ++ allVars exp) + 1) }
+  setFreshVarIndex (max fv (maximum (0 : args ++ allVars exp) + 1))
   return $ simpExpr $ applyArgs exp (drop (length orgargs) args)
  where
   args = map fst targs
@@ -517,16 +560,17 @@ applyFunc fdecl targs = do
     in applyArgs e_v vs
 
 -- Translates a Boolean FlatCurry expression into an SMT formula.
-pred2smt :: TAExpr -> State TransState Term
+pred2smt :: TAExpr -> TransStateM Term
 pred2smt exp = case exp of
   AVar _ i              -> return (TSVar i)
   ALit _ l              -> return (lit2SMT l)
   AComb _ ct (qf,ftype) args ->
     if qf == pre "not" && length args == 1
-      then pred2smt (head args) >>= \barg -> return (tNot barg)
-      else mapM pred2smt args >>= \bargs ->
-           return (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
-                                    False qf ftype) bargs)
+      then do barg <- pred2smt (head args)
+              return (tNot barg)
+      else do bargs <- mapM pred2smt args
+              return (TComb (cons2SMT (ct /= ConsCall || not (null bargs))
+                                      False qf ftype) bargs)
   _     -> error $ "Translation of some Boolean expressions into SMT " ++
                    "not yet supported:\n" ++ show (unAnnExpr exp)
 
@@ -541,7 +585,7 @@ pred2smt exp = case exp of
 -- Moreover, the returned state contains also the types of all fresh variables.
 -- If the first argument is `False`, the expression is not strictly demanded,
 -- i.e., possible contracts of it (if it is a function call) are ignored.
-binding2SMT :: Bool -> VerifyInfo -> (Int,TAExpr) -> State TransState Term
+binding2SMT :: Bool -> VerifyInfo -> (Int,TAExpr) -> TransStateM Term
 binding2SMT odemanded vi (oresvar,oexp) =
   exp2smt odemanded (oresvar, simpExpr oexp)
  where
@@ -552,28 +596,25 @@ binding2SMT odemanded vi (oresvar,oexp) =
     AComb ty ct (qf,_) args ->
       if qf == pre "?" && length args == 2
         then exp2smt demanded (resvar, AOr ty (args!!0) (args!!1))
-        else normalizeArgs args >>= \ (bs,nargs) ->
-             -- TODO: select from 'bindexps' only demanded argument positions
-             mapM (exp2smt (isPrimOp qf || optStrict (toolOpts vi)))
-                  bs >>= \bindexps ->
-             comb2smt qf ty ct nargs bs bindexps
-    ALet _ bs e ->
-      get >>= \ts ->
-      put (addVarTypes (map fst bs) ts) >>
-      mapM (exp2smt False)
-           (map (\ ((i,_),ae) -> (i,ae)) bs) >>= \bindexps ->
-      exp2smt demanded (resvar,e) >>= \bexp ->
+        else do
+          (bs,nargs) <- normalizeArgs args
+          -- TODO: select from 'bindexps' only demanded argument positions
+          bindexps <- mapM (exp2smt (isPrimOp qf || optStrict (toolOpts vi))) bs
+          comb2smt qf ty ct nargs bs bindexps
+    ALet _ bs e -> do
+      addVarTypes (map fst bs)
+      bindexps <- mapM (exp2smt False) (map (\ ((i,_),ae) -> (i,ae)) bs)
+      bexp <- exp2smt demanded (resvar,e)
       return (tConj (bindexps ++ [bexp]))
-    AOr _ e1 e2  ->
-      exp2smt demanded (resvar,e1) >>= \bexp1 ->
-      exp2smt demanded (resvar,e2) >>= \bexp2 ->
+    AOr _ e1 e2  -> do
+      bexp1 <- exp2smt demanded (resvar,e1)
+      bexp2 <- exp2smt demanded (resvar,e2)
       return (tDisj [bexp1, bexp2])
-    ACase _ _ e brs   ->
-      get >>= \ts ->
-      let freshvar = freshVar ts in
-      put (addVarTypes [(freshvar, annExpr e)] (incFreshVarIndex ts)) >>
-      exp2smt demanded (freshvar,e) >>= \argbexp ->
-      mapM branch2smt (map (\b->(freshvar,b)) brs) >>= \bbrs ->
+    ACase _ _ e brs   -> do
+      freshvar <- getFreshVar
+      addVarTypes [(freshvar, annExpr e)]
+      argbexp <- exp2smt demanded (freshvar,e)
+      bbrs    <- mapM branch2smt (map (\b -> (freshvar,b)) brs)
       return (tConj [argbexp, tDisj bbrs])
     ATyped _ e _ -> exp2smt demanded (resvar,e)
     AFree _ _ _ -> error "Free variables not yet supported!"
@@ -596,15 +637,15 @@ binding2SMT odemanded vi (oresvar,oexp) =
                       [tEquVar resvar (TComb (cons2SMT True False qf rtype)
                                              (map arg2smt nargs))]))
      | otherwise -- non-primitive operation: add contract only if demanded
-     = let targs = zip (map fst bs) (map annExpr nargs) in
-       preCondExpOf vi qf targs >>= \precond ->
-       postCondExpOf vi qf (targs ++ [(resvar,rtype)]) >>= \postcond ->
-       return (tConj (bindexps ++ if demanded then [precond,postcond] else []))
+     = do let targs = zip (map fst bs) (map annExpr nargs)
+          precond  <- preCondExpOf vi qf targs
+          postcond <- postCondExpOf vi qf (targs ++ [(resvar,rtype)])
+          return
+            (tConj (bindexps ++ if demanded then [precond,postcond] else []))
     
-    branch2smt (cvar, (ABranch p e)) =
-      exp2smt demanded (resvar,e) >>= \branchbexp ->
-      get >>= \ts ->
-      put ts { varTypes = patvars ++ varTypes ts} >>
+    branch2smt (cvar, (ABranch p e)) = do
+      branchbexp <- exp2smt demanded (resvar,e)
+      addVarTypes patvars
       return (tConj [ tEquVar cvar (pat2SMT p), branchbexp])
      where
       patvars = if isConsPattern p
@@ -615,16 +656,14 @@ binding2SMT odemanded vi (oresvar,oexp) =
                           ALit _ l -> lit2SMT l
                           _        -> error $ "Not normalized: " ++ show e
 
-normalizeArgs :: [TAExpr] -> State TransState ([(Int,TAExpr)],[TAExpr])
+normalizeArgs :: [TAExpr] -> TransStateM ([(Int,TAExpr)],[TAExpr])
 normalizeArgs [] = return ([],[])
 normalizeArgs (e:es) = case e of
-  AVar _ i -> normalizeArgs es >>= \ (bs,nes) ->
-              return ((i,e):bs, e:nes)
-  _        -> get >>= \ts ->
-              let fvar = freshVar ts
-                  nts  = addVarTypes [(fvar,annExpr e)] (incFreshVarIndex ts)
-              in put nts >>
-                 normalizeArgs es >>= \ (bs,nes) ->
+  AVar _ i -> do (bs,nes) <- normalizeArgs es
+                 return ((i,e):bs, e:nes)
+  _        -> do fvar <- getFreshVar
+                 addVarTypes [(fvar,annExpr e)]
+                 (bs,nes) <- normalizeArgs es
                  return ((fvar,e):bs, AVar (annExpr e) fvar : nes)
 
 
