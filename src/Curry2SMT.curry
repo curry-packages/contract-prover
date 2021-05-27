@@ -210,7 +210,7 @@ tdecl2SMT (TypeNew tc _ _ _) =
 tdecl2SMT (Type tc _ tvars consdecls) =
   DeclareDatatypes
    [(tcons2SMT tc, length tvars,
-     DT (map (\v -> 'T':show v) tvars) (map tconsdecl consdecls))]
+     DT (map (\ (v,_) -> 'T' : show v) tvars) (map tconsdecl consdecls))]
  where
   tconsdecl (Cons qn _ _ texps) =
     let cname = transOpName qn

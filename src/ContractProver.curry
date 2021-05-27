@@ -58,7 +58,7 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 26/05/21)"
+  bannerText = "Contract Checking/Verification Tool (Version of 27/05/21)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of module containing auxiliary operations for contract checking.
