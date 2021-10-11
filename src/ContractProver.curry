@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version May 2021
+--- @version October 2021
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -36,6 +36,7 @@ import FlatCurry.TypeAnnotated.Files     ( readTypeAnnotatedFlatCurry
                                          , writeTypeAnnotatedFlatCurryFile )
 import FlatCurry.TypeAnnotated.TypeSubst ( substRule )
 import FlatCurry.ShowIntMod              ( showCurryModule )
+import System.CurryPath                  ( runModuleAction )
 import System.Directory                  ( doesFileExist )
 import System.IOExts                     ( evalCmd )
 import System.Process                    ( exitWith, system )
@@ -61,7 +62,7 @@ banner = unlines [bannerLine, bannerText, bannerLine]
   bannerText = "Contract Checking/Verification Tool (Version of 27/05/21)"
   bannerLine = take (length bannerText) (repeat '=')
 
--- Path name of module containing auxiliary operations for contract checking.
+-- Path name of the module with auxiliary operations for contract checking.
 contractCheckerModule :: String
 contractCheckerModule = packagePath </> "include" </> "ContractChecker"
 
@@ -134,7 +135,7 @@ proveContractsInProg opts oprog = do
 -- of the auxiliary `contractCheckerModule`.
 writeTransformedFCY :: Options -> String -> Prog -> IO ()
 writeTransformedFCY opts progfile prog = do
-  ccprog <- readFlatCurry contractCheckerModule
+  ccprog <- runModuleAction readFlatCurry contractCheckerModule
   let rnmccprog = FCG.rnmProg (FCG.progName prog) ccprog
       ccimps    = FCG.progImports rnmccprog
       ccfuncs   = FCG.progFuncs rnmccprog
@@ -147,7 +148,7 @@ writeTransformedFCY opts progfile prog = do
 -- together with the contents of the auxiliary `contractCheckerModule`.
 writeTransformedTAFCY :: Options -> String -> TAProg -> IO ()
 writeTransformedTAFCY opts progfile prog = do
-  ccprog <- readTypeAnnotatedFlatCurry contractCheckerModule
+  ccprog <- runModuleAction readTypeAnnotatedFlatCurry contractCheckerModule
   let rnmccprog = rnmProg (progName prog) ccprog
       ccimps    = progImports rnmccprog
       ccfuncs   = progFuncs rnmccprog
