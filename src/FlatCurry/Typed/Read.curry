@@ -15,7 +15,7 @@ import Data.Maybe        ( fromJust )
 import FlatCurry.TypeAnnotated.Files ( readTypeAnnotatedFlatCurry )
 import FlatCurry.Annotated.Goodies
 import System.CurryPath              ( getLoadPathForModule, lookupModuleSource
-                                     , runModuleAction, stripCurrySuffix )
+                                     , runModuleActionQuiet, stripCurrySuffix )
 import System.FilePath               ( (</>) )
 
 import FlatCurry.Typed.Goodies
@@ -50,7 +50,8 @@ readTypedFlatCurryWithSpec opts mname = do
            let specpath = stripCurrySuffix specname
            printWhenStatus opts $ "Adding '" ++
              (if optVerb opts > 1 then specpath else specName) ++ "'"
-           specprog <- runModuleAction readTypedFlatCurryWithoutForall specpath
+           specprog <- runModuleActionQuiet readTypedFlatCurryWithoutForall
+                                            specpath
            return (unionTAProg prog (rnmProg mname specprog))
         )
         mbspec

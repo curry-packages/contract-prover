@@ -36,7 +36,7 @@ import FlatCurry.TypeAnnotated.Files     ( readTypeAnnotatedFlatCurry
                                          , writeTypeAnnotatedFlatCurryFile )
 import FlatCurry.TypeAnnotated.TypeSubst ( substRule )
 import FlatCurry.ShowIntMod              ( showCurryModule )
-import System.CurryPath                  ( runModuleAction )
+import System.CurryPath                  ( runModuleActionQuiet )
 import System.Directory                  ( doesFileExist )
 import System.IOExts                     ( evalCmd )
 import System.Process                    ( exitWith, system )
@@ -135,7 +135,7 @@ proveContractsInProg opts oprog = do
 -- of the auxiliary `contractCheckerModule`.
 writeTransformedFCY :: Options -> String -> Prog -> IO ()
 writeTransformedFCY opts progfile prog = do
-  ccprog <- runModuleAction readFlatCurry contractCheckerModule
+  ccprog <- runModuleActionQuiet readFlatCurry contractCheckerModule
   let rnmccprog = FCG.rnmProg (FCG.progName prog) ccprog
       ccimps    = FCG.progImports rnmccprog
       ccfuncs   = FCG.progFuncs rnmccprog
@@ -148,7 +148,8 @@ writeTransformedFCY opts progfile prog = do
 -- together with the contents of the auxiliary `contractCheckerModule`.
 writeTransformedTAFCY :: Options -> String -> TAProg -> IO ()
 writeTransformedTAFCY opts progfile prog = do
-  ccprog <- runModuleAction readTypeAnnotatedFlatCurry contractCheckerModule
+  ccprog <- runModuleActionQuiet readTypeAnnotatedFlatCurry
+                                 contractCheckerModule
   let rnmccprog = rnmProg (progName prog) ccprog
       ccimps    = progImports rnmccprog
       ccfuncs   = progFuncs rnmccprog
