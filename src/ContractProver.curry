@@ -756,7 +756,9 @@ callSMT :: Options -> String -> IO (Maybe String)
 callSMT opts smtinput = do
   printWhenIntermediate opts $ "SMT SCRIPT:\n" ++ showWithLineNums smtinput
   printWhenIntermediate opts $ "CALLING Z3..."
-  (ecode,out,err) <- evalCmd "z3" ["-smt2", "-in", "-T:2"] smtinput
+  (ecode,out,err) <- evalCmd "z3"
+                             ["-smt2", "-in", "-T:" ++ show (optTimeout opts)]
+                             smtinput
   when (ecode>0) $ do printWhenIntermediate opts $ "EXIT CODE: " ++ show ecode
                       writeFile "error.smt" smtinput
   printWhenIntermediate opts $ "RESULT:\n" ++ out

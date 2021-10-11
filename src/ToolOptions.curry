@@ -34,10 +34,11 @@ data Options = Options
                          -- demanded (TODO: add demand analysis to make it
                          -- safe and powerful)
   , optNoProof :: Bool   -- do not write scripts of successful proofs
+  , optTimeout :: Int    -- timeout (in seconds) for SMT prover
   }
 
 defaultOptions :: Options
-defaultOptions = Options 1 False "" True True False False False
+defaultOptions = Options 1 False "" True True False False False 4
 
 --- Process the actual command line argument and return the options
 --- and the name of the main program.
@@ -76,6 +77,10 @@ options =
             "NONE : do not store transformed FlatCurry program\n" ++
             "FCY  : write FlatCurry program (default)\n" ++
             "TAFCY: write type-annotated FlatCurry program")
+  , Option "" ["timeout"]
+           (ReqArg (safeReadNat (\n opts -> opts { optTimeout = n })) "<n>")
+           ("timeout for SMT prover (default: " ++
+            show (optTimeout defaultOptions) ++ "s)")
   , Option "" ["noproof"] (NoArg (\opts -> opts { optNoProof = True }))
            "do not write scripts of successful proofs"
   , Option "" ["name"]
