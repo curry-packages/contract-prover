@@ -2,7 +2,7 @@
 --- Some operations to read type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version May 2021
+--- @version October 2021
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Read where

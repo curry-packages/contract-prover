@@ -3,7 +3,7 @@
 --- related operations.
 ---
 --- @author Michael Hanus
---- @version May 2021
+--- @version October 2021
 -------------------------------------------------------------------------
 
 module ToolOptions
