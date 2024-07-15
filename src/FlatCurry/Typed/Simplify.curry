@@ -3,7 +3,7 @@
 --- In particular, it replaces calls to Eq.== implementations by Prelude.==
 ---
 --- @author  Michael Hanus
---- @version November 2020
+--- @version July 2024
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Simplify
@@ -44,7 +44,8 @@ simpExpr exp = case exp of
   AOr    ty e1 e2  -> AOr ty (simpExpr e1) (simpExpr e2)
   ACase  ty ct e brs -> if isOtherwise e
                           then simpExpr (trueBranch brs)
-                          else ACase ty ct (simpExpr e) (map simpBranch brs)
+                          else ACase ty ct (simpExpr e)
+                                     (concatMap simpBranch brs)
   ATyped ty e te -> ATyped ty (simpExpr e) te
   AFree  ty vs e -> AFree  ty vs (simpExpr e)
  where
@@ -68,7 +69,10 @@ simpExpr exp = case exp of
 
   moreSimpComb e = simpArithExp (simpClassEq e)
 
-  simpBranch (ABranch p e) = ABranch p (simpExpr e)
+  -- simplify branch and remove useless failing branches
+  simpBranch (ABranch p e) = case e of
+    AComb _ FuncCall (qf,_) [] | qf == pre "failed" -> []
+    _                                               -> [ABranch p (simpExpr e)]
 
   isOtherwise e = case e of AComb _ _ (qf,_) _ -> qf == pre "otherwise"
                             _                  -> False

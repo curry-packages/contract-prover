@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version October 2021
+--- @version July 2024
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -59,7 +59,7 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 27/05/21)"
+  bannerText = "Contract Checking/Verification Tool (Version of 15/07/24)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of the module with auxiliary operations for contract checking.
