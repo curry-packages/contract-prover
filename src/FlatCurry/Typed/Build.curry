@@ -22,6 +22,8 @@ import FlatCurry.Typed.Goodies ( pre )
 --import FlatCurry.Typed.Simplify
 import FlatCurry.Typed.Types
 
+infixr 9 ~>
+
 ----------------------------------------------------------------------------
 -- Smart constructors for type expressions.
 
@@ -29,15 +31,19 @@ import FlatCurry.Typed.Types
 baseType :: QName -> TypeExpr
 baseType t = TCons t []
 
--- Type `()` as a FlatCurry type.
+--- A function type.
+(~>) :: TypeExpr -> TypeExpr -> TypeExpr
+t1 ~> t2 = FuncType t1 t2
+
+--- Type `()` as a FlatCurry type.
 unitType :: TypeExpr
 unitType = baseType (pre "()")
 
--- Type `Char` as a FlatCurry type.
+--- Type `Char` as a FlatCurry type.
 charType :: TypeExpr
 charType = baseType (pre "Char")
 
--- Type `Bool` as a FlatCurry type.
+--- Type `Bool` as a FlatCurry type.
 boolType :: TypeExpr
 boolType = baseType (pre "Bool")
 
@@ -45,7 +51,7 @@ boolType = baseType (pre "Bool")
 listType :: TypeExpr -> TypeExpr
 listType a = TCons (pre "[]") [a]
 
--- Type `String` as a FlatCurry type.
+--- Type `String` as a FlatCurry type.
 stringType :: TypeExpr
 stringType = listType charType
 

@@ -15,8 +15,8 @@ module ContractProver where
 
 import Control.Monad      ( unless, when )
 import Data.IORef
-import Data.List          ( elemIndex, find, init, maximum, minimum, nub
-                          , partition, splitOn, union )
+import Data.List          ( elemIndex, find, init, isPrefixOf, last, maximum
+                          , minimum, nub, partition, splitOn, union )
 import Data.Maybe         ( catMaybes, isJust )
 import System.Environment ( getArgs, getEnv )
 
@@ -59,7 +59,7 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 15/07/24)"
+  bannerText = "Contract Checking/Verification Tool (Version of 16/07/24)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of the module with auxiliary operations for contract checking.
@@ -230,8 +230,10 @@ addPreConditionCheck :: TypeExpr -> CombType -> QName -> TypeExpr -> [TAExpr]
 addPreConditionCheck ty ct qf@(mn,fn) tys args =
   AComb ty FuncCall
     ((mn, "checkPreCond"),
-     FuncType ty (FuncType boolType (FuncType stringType (FuncType tt ty))))
-    [ AComb ty ct (toNoCheckQName qf,tys) args
+     showDictTypeOf tt ~> ty ~> boolType ~> stringType ~> tt ~> ty)
+    [ -- add Show dictionary argument of type tt:
+      showDictOf tt
+    , AComb ty ct (toNoCheckQName qf,tys) args
     , AComb boolType ct (toPreCondQName qf, pctype) args
     , string2TAFCY fn
     , tupleExpr args
@@ -256,12 +258,15 @@ fromNoCheckQName (mn,fn) =
 addPostConditionCheck :: QName -> TARule -> TAExpr
 addPostConditionCheck _ (AExternal _ _) =
   error $ "Trying to add postcondition to external function!"
-addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
+addPostConditionCheck qf@(mn,fn) (ARule _ lhs rhs) =
   AComb ty FuncCall
     ((mn, "checkPostCond"),
-     FuncType ty (FuncType (FuncType ty boolType)
-                           (FuncType stringType (FuncType tt ty))))
-    [ rhs
+     showDictTypeOf ty ~> showDictTypeOf tt
+       ~> ty ~> (ty ~> boolType) ~> stringType ~> tt ~> ty)
+    [ -- add Show dictionary arguments of type ty and type tt:
+      showDictOf ty
+    , showDictOf tt
+    , rhs
     , AComb boolType (FuncPartCall 1) (toPostCondQName qf, ty) args
     , string2TAFCY fn
     , tupleExpr args
@@ -269,8 +274,39 @@ addPostConditionCheck qf@(mn,fn) (ARule ty lhs rhs) = --ALit boolType (Intc 42)
  where
   args = map (\ (i,t) -> AVar t i) lhs
   tt = tupleType (map annExpr args)
+  ty = annExpr (last args)
+ 
+------------------------------------------------------------------------------
+-- Generate Show dictionary argument for a given type:
+showDictOf :: TypeExpr -> TAExpr
+showDictOf te = case te of
+  TCons qtc tes -> AComb (showDictTypeOf te) (FuncPartCall 1)
+                     (typeCons2ShowDict qtc,
+                      foldr (~>) (showDictTypeOf te) (map showDictTypeOf tes))
+                     (map showDictOf tes)
+  _             -> error noGenError
+ where
+  noGenError = "showDictOf: cannot generate dictionary for type " ++ show te
 
----------------------------------------------------------------------------
+  typeCons2ShowDict (mn,tc)
+    | mn == "Prelude" = pre (preludeType2ShowDict tc)
+    | otherwise       = (mn, "_inst#Prelude.Show#" ++ mn ++ "." ++ tc)
+
+  preludeType2ShowDict tc
+    | tc `elem` ["Int", "Float", "Char", "Bool", "Maybe", "Either",
+                 "IOError", "Ordering"]
+    = "_inst#Prelude.Show#Prelude." ++ tc
+    | tc `elem` ["[]","()"] || "(," `isPrefixOf` tc
+    = "_inst#Prelude.Show#" ++ tc
+    | otherwise
+    = error noGenError
+
+-- Generate the type of the Show dictionary argument for a given type:
+showDictTypeOf :: TypeExpr -> TypeExpr
+showDictTypeOf te =
+  FlatCurry.Typed.Build.unitType ~> TCons ("Prelude","_Dict#Show") [te]
+
+------------------------------------------------------------------------------
 -- Add (non-trivial) preconditions:
 -- If an operation `f` has some precondition `f'pre`,
 -- replace the rule `f xs = rhs` by the following rules:
