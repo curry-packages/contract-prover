@@ -17,7 +17,7 @@ import Control.Monad      ( unless, when )
 import Data.IORef
 import Data.List          ( elemIndex, find, init, isPrefixOf, last, maximum
                           , minimum, nub, partition, splitOn, union )
-import Data.Maybe         ( catMaybes, isJust )
+import Data.Maybe         ( catMaybes, isJust, isNothing )
 import System.Environment ( getArgs, getEnv )
 
 -- Imports from dependencies:
@@ -59,7 +59,7 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 16/07/24)"
+  bannerText = "Contract Checking/Verification Tool (Version of 17/07/24)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of the module with auxiliary operations for contract checking.
@@ -229,19 +229,20 @@ addPreConditionCheck :: TypeExpr -> CombType -> QName -> TypeExpr -> [TAExpr]
                      -> TAExpr
 addPreConditionCheck ty ct qf@(mn,fn) tys args =
   AComb ty FuncCall
-    ((mn, "checkPreCond"),
+    ((mn, maybe "checkPreCondNoShow" (const "checkPreCond") showdicttt),
      showDictTypeOf tt ~> ty ~> boolType ~> stringType ~> tt ~> ty)
-    [ -- add Show dictionary argument of type tt:
-      showDictOf tt
-    , AComb ty ct (toNoCheckQName qf,tys) args
+    -- add Show dictionary argument of type tt, if possible:
+    (maybe [] (:[]) showdicttt ++
+    [ AComb ty ct (toNoCheckQName qf,tys) args
     , AComb boolType ct (toPreCondQName qf, pctype) args
     , string2TAFCY fn
     , tupleExpr args
-    ]
+    ])
  where
-  argtypes = map annExpr args
-  tt       = tupleType argtypes
-  pctype   = foldr FuncType boolType argtypes
+  argtypes   = map annExpr args
+  tt         = tupleType argtypes
+  pctype     = foldr FuncType boolType argtypes
+  showdicttt = showDictOf tt
 
 --- Transform a qualified name into a name of the corresponding function
 --- without precondition checking by adding the suffix "'NOCHECK".
@@ -260,46 +261,50 @@ addPostConditionCheck _ (AExternal _ _) =
   error $ "Trying to add postcondition to external function!"
 addPostConditionCheck qf@(mn,fn) (ARule _ lhs rhs) =
   AComb ty FuncCall
-    ((mn, "checkPostCond"),
+    ((mn, if showdictsexists then "checkPostCond" else "checkPostCondNoShow"),
      showDictTypeOf ty ~> showDictTypeOf tt
        ~> ty ~> (ty ~> boolType) ~> stringType ~> tt ~> ty)
-    [ -- add Show dictionary arguments of type ty and type tt:
-      showDictOf ty
-    , showDictOf tt
-    , rhs
-    , AComb boolType (FuncPartCall 1) (toPostCondQName qf, ty) args
-    , string2TAFCY fn
-    , tupleExpr args
-    ]
+    (-- add Show dictionary arguments of types ty and tt, if both exist:
+     (if showdictsexists then catMaybes showdicts else []) ++
+     [ rhs
+     , AComb boolType (FuncPartCall 1) (toPostCondQName qf, ty) args
+     , string2TAFCY fn
+     , tupleExpr args
+     ])
  where
   args = map (\ (i,t) -> AVar t i) lhs
-  tt = tupleType (map annExpr args)
-  ty = annExpr (last args)
+  tt   = tupleType (map annExpr args)
+  ty   = annExpr (last args)
+  showdicts       = [showDictOf ty, showDictOf tt]
+  showdictsexists = all isJust showdicts
  
 ------------------------------------------------------------------------------
--- Generate Show dictionary argument for a given type:
-showDictOf :: TypeExpr -> TAExpr
+-- Generate Show dictionary argument for a given type, if possible
+-- (e.g., if the type is not polymorphic or functional).
+showDictOf :: TypeExpr -> Maybe TAExpr
 showDictOf te = case te of
-  TCons qtc tes -> AComb (showDictTypeOf te) (FuncPartCall 1)
-                     (typeCons2ShowDict qtc,
-                      foldr (~>) (showDictTypeOf te) (map showDictTypeOf tes))
-                     (map showDictOf tes)
-  _             -> error noGenError
+  TCons qtc tes ->  do
+    sd  <- typeCons2ShowDict qtc
+    sds <- mapM showDictOf tes
+    return $ AComb (showDictTypeOf te) (FuncPartCall 1)
+                   (sd, foldr (~>) (showDictTypeOf te) (map showDictTypeOf tes))
+                   sds
+  _             -> Nothing
  where
-  noGenError = "showDictOf: cannot generate dictionary for type " ++ show te
-
   typeCons2ShowDict (mn,tc)
-    | mn == "Prelude" = pre (preludeType2ShowDict tc)
-    | otherwise       = (mn, "_inst#Prelude.Show#" ++ mn ++ "." ++ tc)
+    | mn == "Prelude" = maybe Nothing (Just . pre) (preludeType2ShowDict tc)
+    -- here we assume that a Show instance exists for the user-defined type
+    -- safer solution: check the program for the existence of this instance
+    | otherwise       = Just (mn, "_inst#Prelude.Show#" ++ mn ++ "." ++ tc)
 
   preludeType2ShowDict tc
     | tc `elem` ["Int", "Float", "Char", "Bool", "Maybe", "Either",
                  "IOError", "Ordering"]
-    = "_inst#Prelude.Show#Prelude." ++ tc
+    = Just $ "_inst#Prelude.Show#Prelude." ++ tc
     | tc `elem` ["[]","()"] || "(," `isPrefixOf` tc
-    = "_inst#Prelude.Show#" ++ tc
+    = Just $ "_inst#Prelude.Show#" ++ tc
     | otherwise
-    = error noGenError
+    = Nothing
 
 -- Generate the type of the Show dictionary argument for a given type:
 showDictTypeOf :: TypeExpr -> TypeExpr

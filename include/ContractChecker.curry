@@ -19,6 +19,14 @@ checkPreCond x pc fn args =
     else error $ "Precondition of operation '" ++ fn ++
                  "' not satisfied for arguments:\n" ++ show args
 
+--- This version is used in case of polymorphic operations where there
+--- is not `Show` context.
+checkPreCondNoShow :: a -> Bool -> String -> b -> a
+checkPreCondNoShow x pc fn _ =
+  if pc
+    then x
+    else error $ "Precondition of operation '" ++ fn ++ "' not satisfied!"
+
 
 --- Auxiliary operation to check the validity of a given postcondition.
 --- For this purpose, each rule
@@ -36,3 +44,11 @@ checkPostCond rhs fpost fname args =
     else error $ "Postcondition of operation '" ++ fname ++
                  "' failed for arguments/result:\n" ++
                  show args ++ " -> " ++ show rhs
+
+--- This version is used in case of polymorphic operations where there
+--- is not `Show` context.
+checkPostCondNoSHow :: a -> (a -> Bool) -> String -> b -> a
+checkPostCondNoSHow rhs fpost fname _ =
+  if fpost rhs
+    then rhs
+    else error $ "Postcondition of operation '" ++ fname ++ "' failed!"

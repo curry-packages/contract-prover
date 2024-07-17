@@ -1,6 +1,9 @@
 contract-prover
 ===============
 
+Overview
+--------
+
 This package contains a tool to verify and add contracts in FlatCurry programs
 by proving contracts with an SMT solver. If a proof is successful,
 no contract check will be performed at run time, otherwise
@@ -9,8 +12,12 @@ The static verification of contracts has the advantage that
 the resulting program will run more efficiently compared
 to a program with dynamic contract checking only/
 
-A detailed description of the ideas of this tool can be found in the
-[journal paper](http://dx.doi.org/10.3233/FI-2020-1925}.
+A detailed description of the ideas of this tool can be found in
+the journal paper:
+
+> M. Hanus: Combining Static and Dynamic Contract Checking for Curry,
+> Fundamenta Informaticae 173(4), pp. 285-314, 2020,
+> DOI [10.3233/FI-2020-1925](http://dx.doi.org/10.3233/FI-2020-1925)
 
 The tool is invoked via
 
@@ -33,9 +40,26 @@ This file contains the SMT script of this proof.
 The directory `examples` contains various examples where the
 contract prover can eliminate all contracts at compile time.
 
+Dynamic contracts
+-----------------
+
+As mentioned above, the tool adds checks for contracts at run time
+if it cannot be verified that these contracts always hold.
+This is done by transforming the FlatCurry code of the modules
+by inserting Curry code which checks the contracts when the
+correspondings operations are invoked at run time.
+When a contract is not satisfied,
+this checking code terminates the program with an error message
+about the violated contract. The error message also shows
+the arguments (and result in case of a violated postcondition)
+of the operation, if this is possible with the operation `Prelude.show`
+(i.e., if the types are not polymorphic and not functional).
+Thus, for user-defined types occurring in contracts,
+it is assumed that instances of class `Show` exist for these types.
+
 
 Implementation
-==============
+--------------
 
 In contrast to the first contract prover described in
 [LOPSTR 2017 paper](https://dx.doi.org/10.1007/978-3-319-94460-9_19),
