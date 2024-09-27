@@ -2,11 +2,15 @@
 --- Definition of some standard names in type-annotated FlatCurry programs.
 ---
 --- @author  Michael Hanus
---- @version April 2019
+--- @version September 2024
 ---------------------------------------------------------------------------
 
-module FlatCurry.Typed.Names where
+module FlatCurry.Typed.Names
+  ( isPrimOp, preludePrimOps, unaryPrimOps, binaryPrimOps
+  , transPrimTCons, transPrimCons )
+where
 
+import FlatCurry.Names2SMT   ( unaryPrimOps, binaryPrimOps )
 import FlatCurry.Typed.Types
 
 ----------------------------------------------------------------------------
@@ -23,45 +27,6 @@ preludePrimOps = unaryPrimOps ++ binaryPrimOps ++
   ,("lchoice","lchoice")
   ,("rchoice","rchoice")
   ,("apply","apply") -- TODO...
-  ]
-
---- Primitive unary operations of the prelude and their SMT names.
-unaryPrimOps :: [(String,String)]
-unaryPrimOps =
-  [("_impl#negate#Prelude.Num#Prelude.Int","-")
-  ,("not","not")
-  ]
-
---- Primitive binary operations of the prelude and their SMT names.
-binaryPrimOps :: [(String,String)]
-binaryPrimOps =
-  [("&&","and")
-  ,("||","or")
-  ,("==","=")
-  ,("_impl#==#Prelude.Eq#Prelude.Int","=")
-  ,("_impl#==#Prelude.Eq#Prelude.Char","=")
-  ,("/=","/=")  -- will be translated as negated '='
-  ,("_impl#/=#Prelude.Eq#Prelude.Int","/=")
-  ,("_impl#/=#Prelude.Eq#Prelude.Char","/=")
-  ,("_impl#+#Prelude.Num#Prelude.Int","+")
-  ,("_impl#-#Prelude.Num#Prelude.Int","-")
-  ,("_impl#*#Prelude.Num#Prelude.Int","*")
-  ,("_impl#negate#Prelude.Num#Prelude.Int","-")
-  ,("_impl#div#Prelude.Integral#Prelude.Int","div")
-  ,("_impl#mod#Prelude.Integral#Prelude.Int","mod")
-  ,("_impl#rem#Prelude.Integral#Prelude.Int","rem")
-  ,("_impl#>#Prelude.Ord#Prelude.Int",">")
-  ,("_impl#<#Prelude.Ord#Prelude.Int","<")
-  ,("_impl#>=#Prelude.Ord#Prelude.Int",">=")
-  ,("_impl#<=#Prelude.Ord#Prelude.Int","<=")
-  ,("_impl#>#Prelude.Ord#Prelude.Float",">")
-  ,("_impl#<#Prelude.Ord#Prelude.Float","<")
-  ,("_impl#>=#Prelude.Ord#Prelude.Float",">=")
-  ,("_impl#<=#Prelude.Ord#Prelude.Float","<=")
-  ,("_impl#>#Prelude.Ord#Prelude.Char",">")
-  ,("_impl#<#Prelude.Ord#Prelude.Char","<")
-  ,("_impl#>=#Prelude.Ord#Prelude.Char",">=")
-  ,("_impl#<=#Prelude.Ord#Prelude.Char","<=")
   ]
 
 --- Primitive type constructors from the prelude and their SMT names.
