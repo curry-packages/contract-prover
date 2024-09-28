@@ -3,7 +3,7 @@
 --- In particular, it replaces calls to Eq.== implementations by Prelude.==
 ---
 --- @author  Michael Hanus
---- @version July 2024
+--- @version September 2024
 ---------------------------------------------------------------------------
 
 module FlatCurry.Typed.Simplify
