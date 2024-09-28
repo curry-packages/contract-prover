@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version July 2024
+--- @version September 2024
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -59,7 +59,7 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 17/07/24)"
+  bannerText = "Contract Checking/Verification Tool (Version of 28/09/24)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of the module with auxiliary operations for contract checking.
@@ -292,17 +292,19 @@ showDictOf te = case te of
   _             -> Nothing
  where
   typeCons2ShowDict (mn,tc)
-    | mn == "Prelude" = maybe Nothing (Just . pre) (preludeType2ShowDict tc)
+    | mn == "Prelude"
+    = maybe Nothing (Just . pre) (preludeType2ShowDict tc)
     -- here we assume that a Show instance exists for the user-defined type
     -- safer solution: check the program for the existence of this instance
-    | otherwise       = Just (mn, "_inst#Prelude.Show#" ++ mn ++ "." ++ tc)
+    | otherwise
+    = Just (mn, "_inst#Prelude.Show#" ++ mn ++ "." ++ tc ++ "#")
 
   preludeType2ShowDict tc
     | tc `elem` ["Int", "Float", "Char", "Bool", "Maybe", "Either",
                  "IOError", "Ordering"]
-    = Just $ "_inst#Prelude.Show#Prelude." ++ tc
+    = Just $ "_inst#Prelude.Show#Prelude." ++ tc ++ "#"
     | tc `elem` ["[]","()"] || "(," `isPrefixOf` tc
-    = Just $ "_inst#Prelude.Show#" ++ tc
+    = Just $ "_inst#Prelude.Show#" ++ tc ++ "#"
     | otherwise
     = Nothing
 

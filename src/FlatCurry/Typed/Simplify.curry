@@ -61,7 +61,7 @@ simpExpr exp = case exp of
    | qf == pre "$"
    = simpComb ty ct (pre "apply", qt) args
    -- simplify equality instance on lists:
-   | ct == FuncCall && qf == pre "_impl#==#Prelude.Eq#[]"
+   | ct == FuncCall && qf == pre "_impl#==#Prelude.Eq#[]#0##"
    = AComb ty ct (pre "==", dropArgTypes 1 qt) (tail args)
    -- simplify equal class calls:
    | otherwise
