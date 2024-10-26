@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version September 2024
+--- @version October 2024
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -50,7 +50,7 @@ import FlatCurry.Typed.Goodies
 import FlatCurry.Typed.Names
 import FlatCurry.Typed.Simplify ( simpProg, simpFuncDecl, simpExpr )
 import FlatCurry.Typed.Types
-import PackageConfig            ( packagePath )
+import PackageConfig            ( getPackagePath )
 import ToolOptions
 import VerifierState
 
@@ -59,12 +59,12 @@ import VerifierState
 banner :: String
 banner = unlines [bannerLine, bannerText, bannerLine]
  where
-  bannerText = "Contract Checking/Verification Tool (Version of 28/09/24)"
+  bannerText = "Contract Checking/Verification Tool (Version of 26/10/24)"
   bannerLine = take (length bannerText) (repeat '=')
 
 -- Path name of the module with auxiliary operations for contract checking.
-contractCheckerModule :: String
-contractCheckerModule = packagePath </> "include" </> "ContractChecker"
+getContractCheckerModulePath :: IO String
+getContractCheckerModulePath = getIncludePath "ContractChecker.curry"
 
 ---------------------------------------------------------------------------
 
@@ -132,10 +132,11 @@ proveContractsInProg opts oprog = do
   line = take 78 (repeat '-')
 
 -- Writes the transformed FlatCurry program together with the contents
--- of the auxiliary `contractCheckerModule`.
+-- of the auxiliary `ContractChecker` module.
 writeTransformedFCY :: Options -> String -> Prog -> IO ()
 writeTransformedFCY opts progfile prog = do
-  ccprog <- runModuleActionQuiet readFlatCurry contractCheckerModule
+  ccpath <- getContractCheckerModulePath
+  ccprog <- runModuleActionQuiet readFlatCurry ccpath
   let rnmccprog = FCG.rnmProg (FCG.progName prog) ccprog
       ccimps    = FCG.progImports rnmccprog
       ccfuncs   = FCG.progFuncs rnmccprog
@@ -145,11 +146,11 @@ writeTransformedFCY opts progfile prog = do
   printWhenStatus opts $ "Transformed program written to: " ++ progfile
 
 -- Writes the transformed type-annotated FlatCurry program
--- together with the contents of the auxiliary `contractCheckerModule`.
+-- together with the contents of the auxiliary `ContractChecker` module.
 writeTransformedTAFCY :: Options -> String -> TAProg -> IO ()
 writeTransformedTAFCY opts progfile prog = do
-  ccprog <- runModuleActionQuiet readTypeAnnotatedFlatCurry
-                                 contractCheckerModule
+  ccpath <- getContractCheckerModulePath
+  ccprog <- runModuleActionQuiet readTypeAnnotatedFlatCurry ccpath
   let rnmccprog = rnmProg (progName prog) ccprog
       ccimps    = progImports rnmccprog
       ccfuncs   = progFuncs rnmccprog
@@ -768,7 +769,7 @@ checkImplicationWithSMT opts vstref scripttitle vartypes
   let smtprelude = smtstdtypes ++ smtchoice
   callSMT opts $ "; " ++ scripttitle ++ "\n\n" ++ smtprelude ++ showSMT smt
  where
-  readInclude f = readFile (packagePath </> "include" </> f)
+  readInclude f = getIncludePath f >>= readFile
   toChoiceVar i = (i, TCons (pre "Choice") [])
 
 -- Computes SMT type declarations for all types occurring in the
@@ -865,6 +866,25 @@ tconsOfTypeExpr (ForallType _ te) =  tconsOfTypeExpr te
 
 ---------------------------------------------------------------------------
 -- Auxiliaries:
+
+--- Returns the path of a file provided as an argument in the `include`
+--- directory of the package or, if this does not exists,
+--- in the local `include` directory.
+--- If both does not exist, a warning is issued.
+getIncludePath :: String -> IO String
+getIncludePath incfile = do
+  ppinclude <- fmap (</> "include" </> incfile) getPackagePath
+  exppinclude <- doesFileExist ppinclude
+  if exppinclude
+    then return ppinclude
+    else do
+      let localinclude = "include" </> incfile
+      exlocalinclude <- doesFileExist localinclude
+      if exlocalinclude
+        then return localinclude
+        else do putStrLn $
+                  "Warning: '" ++ localinclude ++ "' required but not found!"
+                return incfile
 
 --- Checks whether a file exists in one of the directories on the PATH.
 fileInPath :: String -> IO Bool
