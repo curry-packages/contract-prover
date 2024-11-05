@@ -10,7 +10,7 @@ no contract check will be performed at run time, otherwise
 a dynamic (strict) contract check will be added.
 The static verification of contracts has the advantage that
 the resulting program will run more efficiently compared
-to a program with dynamic contract checking only/
+to a program with dynamic contract checking only.
 
 A detailed description of the ideas of this tool can be found in
 the journal paper:
@@ -57,6 +57,18 @@ of the operation, if this is possible with the operation `Prelude.show`
 Thus, for user-defined types occurring in contracts,
 it is assumed that instances of class `Show` exist for these types.
 
+
+------------------------------------------------------------------------------
+
+Web Demo Installation
+---------------------
+
+If you want to try the contract prover on simple programs via a web interface,
+you can use a
+[Web Demo Installation](https://cpm.curry-lang.org/webapps/contracts/)
+of the prover.
+
+------------------------------------------------------------------------------
 
 Implementation
 --------------
