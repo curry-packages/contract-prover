@@ -3,7 +3,7 @@
 --- and to remove the statically proven conditions from a program.
 ---
 --- @author  Michael Hanus
---- @version October 2024
+--- @version November 2025
 ---------------------------------------------------------------------------
 -- A few things to be done to improve contract checking:
 --
@@ -27,7 +27,7 @@ import Control.Monad.Trans.Class         ( lift )
 import Control.Monad.Trans.State         ( StateT, get, put, evalStateT )
 import System.FilePath                   ( (</>) )
 import FlatCurry.Files
-import FlatCurry.Types
+import FlatCurry.Types hiding ( pre )
 import qualified FlatCurry.Goodies as FCG
 import FlatCurry.Annotated.Goodies
 import FlatCurry.Annotated.Types
